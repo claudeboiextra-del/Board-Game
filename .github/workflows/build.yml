@@ -1,4 +1,4 @@
-name: Build Sky Circuit PS3
+name: Build Board Game PS3
 
 on:
   push:
@@ -10,9 +10,9 @@ on:
 env:
   PS3DEV: ${{ github.workspace }}/ps3dev
   PSL1GHT: ${{ github.workspace }}/ps3dev
-  APPID: SKYC00001
-  CONTENTID: UP0001-SKYC00001_00-0000000000000000
-  TITLE: Sky Circuit
+  APPID: BRDG00001
+  CONTENTID: UP0001-BRDG00001_00-0000000000000000
+  TITLE: Board Game
 
 jobs:
   build:
@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ps3dev
-          key: ps3dev-core-skycircuit-v3
+          key: ps3dev-core-boardgame-v1
 
       - name: Get ps3toolchain
         if: steps.cache_core.outputs.cache-hit != 'true'
@@ -79,7 +79,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ps3dev
-          key: ps3dev-core-skycircuit-v3
+          key: ps3dev-core-boardgame-v1
 
       - name: Upload build logs
         if: always()
@@ -124,23 +124,23 @@ jobs:
           export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
           python3 tools/make_icon.py ICON0.PNG || true
           mkdir -p build/pkg/USRDIR
-          # make already ran sprxlinker on build/skycircuit.elf via the .self rule
-          make_self_npdrm build/skycircuit.elf build/pkg/USRDIR/EBOOT.BIN "$CONTENTID" || make_self build/skycircuit.elf build/pkg/USRDIR/EBOOT.BIN
+          # make already ran sprxlinker on build/boardgame.elf via the .self rule
+          make_self_npdrm build/boardgame.elf build/pkg/USRDIR/EBOOT.BIN "$CONTENTID" || make_self build/boardgame.elf build/pkg/USRDIR/EBOOT.BIN
           cp ICON0.PNG build/pkg/ICON0.PNG 2>/dev/null || true
           SFO=$(command -v sfo || command -v sfo.py || true)
           PKG=$(command -v pkg || command -v pkg.py || true)
           echo "using SFO=$SFO PKG=$PKG"
           [ -n "$SFO" ] && [ -n "$PKG" ] || { echo "sfo/pkg tool not found in:"; ls "$PS3DEV/bin"; exit 1; }
           "$SFO" --title "$TITLE" --appid "$APPID" -f sfo.xml build/pkg/PARAM.SFO || true
-          "$PKG" --contentid "$CONTENTID" build/pkg build/skycircuit.pkg || true
-          ls -l build/skycircuit.pkg build/pkg/USRDIR/EBOOT.BIN build/pkg/PARAM.SFO 2>/dev/null || ls -l build/
+          "$PKG" --contentid "$CONTENTID" build/pkg build/boardgame.pkg || true
+          ls -l build/boardgame.pkg build/pkg/USRDIR/EBOOT.BIN build/pkg/PARAM.SFO 2>/dev/null || ls -l build/
 
       - name: Upload PS3 Package
         uses: actions/upload-artifact@v4
         with:
-          name: sky-circuit-ps3
+          name: board-game-ps3
           path: |
-            build/skycircuit.pkg
-            build/skycircuit.elf
+            build/boardgame.pkg
+            build/boardgame.elf
             build/*.elf
           if-no-files-found: warn

@@ -7,6 +7,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <audio/audio.h>
 
 #define SFX_RATE     48000
@@ -49,7 +50,7 @@ int sfx_init(void)
 
     p.numChannels = AUDIO_PORT_2CH;
     p.numBlocks   = SFX_BLOCKS;
-    p.attr        = 0;
+    p.attrib      = 0;
     p.level       = 1.0f;
 
     ret = audioPortOpen(&p, &sfx_port);
@@ -166,21 +167,24 @@ static float gen_sample(void)
 
 void sfx_update(void)
 {
-    u32 i, b;
+    u32 i, b, nblocks;
     f32 *buf;
-    u64 read_idx;
+    u64 base, read_idx;
 
     if (!sfx_ready || !sfx_cfg.audioDataStart) return;
 
     /*
-     * PSL1GHT stores the current read block index just before the buffer.
-     * Fill the next free block with mono→stereo samples.
+     * PSL1GHT: audioDataStart is a raw address (u64).
+     * Current read index is stored 8 bytes before the buffer.
      */
-    read_idx = *(u64 *)((u8 *)sfx_cfg.audioDataStart - 8);
-    b = (u32)((read_idx + 1) % (sfx_cfg.numBlocks ? sfx_cfg.numBlocks : SFX_BLOCKS));
+    base = (u64)sfx_cfg.audioDataStart;
+    nblocks = sfx_cfg.numBlocks ? sfx_cfg.numBlocks : SFX_BLOCKS;
 
-    buf = (f32 *)((u8 *)sfx_cfg.audioDataStart +
-          b * sfx_cfg.channelCount * SFX_SAMPLES * sizeof(f32));
+    read_idx = *(u64 *)(uintptr_t)(base - 8);
+    b = (u32)((read_idx + 1) % nblocks);
+
+    buf = (f32 *)(uintptr_t)(base +
+          (u64)b * (u64)sfx_cfg.channelCount * (u64)SFX_SAMPLES * sizeof(f32));
 
     for (i = 0; i < SFX_SAMPLES; ++i) {
         f32 s = gen_sample();

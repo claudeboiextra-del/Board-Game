@@ -29,8 +29,6 @@ jobs:
             texinfo libncurses5-dev patch python3 python-is-python3 subversion wget \
             zlib1g-dev libtool-bin python3-dev bzip2 libgmp3-dev pkg-config git g++ libssl-dev clang
 
-      # Toolchain build. Only the core (GCC/binutils/newlib/PSL1GHT) is required.
-      # ps3libraries (cairo etc.) is intentionally not built.
       - name: Configure download retries and helpers
         run: |
           printf 'tries = 5\nretry_connrefused = on\nwaitretry = 10\ntimeout = 60\n' >> ~/.wgetrc
@@ -55,7 +53,6 @@ jobs:
         run: |
           export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
           cd ps3toolchain-src
-          # hide the ps3libraries script so toolchain.sh only builds the core
           mkdir -p /tmp/hold
           mv scripts/*ps3libraries*.sh /tmp/hold/ || true
           ./toolchain.sh > "${{ github.workspace }}/logs/stage-a.log" 2>&1 \
@@ -93,7 +90,7 @@ jobs:
         run: |
           export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
           ls "$PS3DEV" "$PS3DEV/bin" "$PS3DEV/ppu/bin" || true
-          which powerpc64-ps3-elf-gcc powerpc64-ps3-elf-g++ sprxlinker || { echo "TOOLCHAIN MISSING - see listing above"; exit 1; }
+          which powerpc64-ps3-elf-gcc powerpc64-ps3-elf-g++ sprxlinker make_self_npdrm || { echo "TOOLCHAIN MISSING"; exit 1; }
 
       - name: Build tiny3d
         run: |
@@ -103,8 +100,6 @@ jobs:
           export PORTLIBS="$PS3DEV/portlibs/ppu"
           mkdir -p "$PORTLIBS/include" "$PORTLIBS/lib"
           git clone --depth=1 https://github.com/wargio/tiny3D.git tiny3d-src
-          # GCC 7.2 -O2 can miscompile (ps3toolchain issue #118); build tiny3d at -O1
-          grep -n -- '-O' tiny3d-src/lib/Makefile || true
           sed -i 's/-O2/-O1/' tiny3d-src/lib/Makefile || true
           make -C tiny3d-src/lib clean || true
           make -C tiny3d-src/lib
@@ -115,32 +110,68 @@ jobs:
         run: |
           set -ex
           export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
-          export PS3DEV PSL1GHT
+          export PS3DEV PSL1GHT PORTLIBS="$PS3DEV/portlibs/ppu"
+          make clean || true
           make
 
+      # Proper PSL1GHT packaging (ppu_rules style):
+      # strip → sprxlinker → make_self_npdrm → sfo → pkg → package_finalize
       - name: Create SELF and PKG
         run: |
           set -ex
           export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
-          python3 tools/make_icon.py ICON0.PNG || true
+          export PS3DEV PSL1GHT
+
+          ELF=build/boardgame.elf
+          test -f "$ELF"
+
+          # Icon: prefer SDK default (known-good), else generate
+          if [ -f "$PS3DEV/bin/ICON0.PNG" ]; then
+            cp "$PS3DEV/bin/ICON0.PNG" ICON0.PNG
+          else
+            python3 tools/make_icon.py ICON0.PNG
+          fi
+
           mkdir -p build/pkg/USRDIR
-          # make already ran sprxlinker on build/boardgame.elf via the .self rule
-          make_self_npdrm build/boardgame.elf build/pkg/USRDIR/EBOOT.BIN "$CONTENTID" || make_self build/boardgame.elf build/pkg/USRDIR/EBOOT.BIN
-          cp ICON0.PNG build/pkg/ICON0.PNG 2>/dev/null || true
-          SFO=$(command -v sfo || command -v sfo.py || true)
-          PKG=$(command -v pkg || command -v pkg.py || true)
-          echo "using SFO=$SFO PKG=$PKG"
-          [ -n "$SFO" ] && [ -n "$PKG" ] || { echo "sfo/pkg tool not found in:"; ls "$PS3DEV/bin"; exit 1; }
-          "$SFO" --title "$TITLE" --appid "$APPID" -f sfo.xml build/pkg/PARAM.SFO || true
-          "$PKG" --contentid "$CONTENTID" build/pkg build/boardgame.pkg || true
-          ls -l build/boardgame.pkg build/pkg/USRDIR/EBOOT.BIN build/pkg/PARAM.SFO 2>/dev/null || ls -l build/
+
+          # Strip + sprxlink into a working copy, then NPDRM-sign as EBOOT.BIN
+          cp "$ELF" build/boardgame.strip.elf
+          powerpc64-ps3-elf-strip build/boardgame.strip.elf || ppu-strip build/boardgame.strip.elf
+          sprxlinker build/boardgame.strip.elf
+
+          make_self_npdrm build/boardgame.strip.elf build/pkg/USRDIR/EBOOT.BIN "$CONTENTID"
+          test -f build/pkg/USRDIR/EBOOT.BIN
+
+          cp ICON0.PNG build/pkg/ICON0.PNG
+
+          # PARAM.SFO — fail hard if sfo fails (no || true)
+          SFO=$(command -v sfo || command -v sfo.py)
+          PKG=$(command -v pkg || command -v pkg.py)
+          FINALIZE=$(command -v package_finalize || true)
+          echo "SFO=$SFO PKG=$PKG FINALIZE=$FINALIZE"
+
+          "$SFO" --title "$TITLE" --appid "$APPID" -f sfo.xml build/pkg/PARAM.SFO
+          test -f build/pkg/PARAM.SFO
+
+          # Build PKG then finalize (required for installable .gnpdrm.pkg on CFW/HEN)
+          "$PKG" --contentid "$CONTENTID" build/pkg build/boardgame.pkg
+          test -f build/boardgame.pkg
+
+          cp build/boardgame.pkg build/boardgame.gnpdrm.pkg
+          if [ -n "$FINALIZE" ]; then
+            package_finalize build/boardgame.gnpdrm.pkg
+          else
+            echo "WARNING: package_finalize not found — install may fail with corrupted data"
+          fi
+
+          ls -la build/boardgame.pkg build/boardgame.gnpdrm.pkg build/pkg/USRDIR/EBOOT.BIN build/pkg/PARAM.SFO build/pkg/ICON0.PNG
 
       - name: Upload PS3 Package
         uses: actions/upload-artifact@v4
         with:
           name: board-game-ps3
           path: |
+            build/boardgame.gnpdrm.pkg
             build/boardgame.pkg
             build/boardgame.elf
-            build/*.elf
-          if-no-files-found: warn
+          if-no-files-found: error

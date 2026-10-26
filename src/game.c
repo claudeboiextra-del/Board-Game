@@ -1,7 +1,7 @@
 /*
- * Sky Circuit – core game state machine
+ * Board Game – core game state machine
  * Lightweight, expressive turn flow with dice, movement, shops, stars,
- * CPU AI (3 difficulty tiers) and RNG minigame substitute.
+ * CPU AI (3 difficulty tiers) and RNG contest substitute.
  */
 
 #include "game.h"
@@ -293,7 +293,7 @@ void game_update(GameContext *g, uint32_t buttons)
     case STATE_LAND:
         apply_land(g, p);
         if (g->state == STATE_LAND) { /* not redirected to shop */
-            /* after land, chance of simulated minigame every few turns */
+            /* after land, chance of simulated contest every few turns */
             if ((g->round % 3) == 0 && g->current_player == 0) {
                 g->state = STATE_MINIGAME_SIM;
             } else {

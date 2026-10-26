@@ -1,7 +1,7 @@
-# Sky Circuit - PSL1GHT / Tiny3D Board Game
+# Board Game - PSL1GHT / Tiny3D
 # Target: PS3 firmware 4.92 + HEN
 
-TARGET		:= skycircuit
+TARGET		:= boardgame
 BUILD		:= build
 SOURCES		:= src
 INCLUDES	:= include

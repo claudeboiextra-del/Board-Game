@@ -1,0 +1,146 @@
+name: Build Sky Circuit PS3
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  PS3DEV: ${{ github.workspace }}/ps3dev
+  PSL1GHT: ${{ github.workspace }}/ps3dev
+  APPID: SKYC00001
+  CONTENTID: UP0001-SKYC00001_00-0000000000000000
+  TITLE: Sky Circuit
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Host Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake bison flex gcc libelf-dev make \
+            texinfo libncurses5-dev patch python3 python-is-python3 subversion wget \
+            zlib1g-dev libtool-bin python3-dev bzip2 libgmp3-dev pkg-config git g++ libssl-dev clang
+
+      # Toolchain build. Only the core (GCC/binutils/newlib/PSL1GHT) is required.
+      # ps3libraries (cairo etc.) is intentionally not built.
+      - name: Configure download retries and helpers
+        run: |
+          printf 'tries = 5\nretry_connrefused = on\nwaitretry = 10\ntimeout = 60\n' >> ~/.wgetrc
+          printf 'retry = 5\nretry-delay = 10\nretry-all-errors\nconnect-timeout = 30\n' >> ~/.curlrc
+          mkdir -p "${{ github.workspace }}/logs"
+
+      - name: Restore core toolchain cache
+        id: cache_core
+        uses: actions/cache/restore@v4
+        with:
+          path: ps3dev
+          key: ps3dev-core-skycircuit-v3
+
+      - name: Get ps3toolchain
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$PS3DEV"
+          git clone --depth=1 https://github.com/ps3dev/ps3toolchain.git ps3toolchain-src
+
+      - name: Stage A - build core toolchain (GCC, binutils, PSL1GHT)
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          cd ps3toolchain-src
+          # hide the ps3libraries script so toolchain.sh only builds the core
+          mkdir -p /tmp/hold
+          mv scripts/*ps3libraries*.sh /tmp/hold/ || true
+          ./toolchain.sh > "${{ github.workspace }}/logs/stage-a.log" 2>&1 \
+            || { tail -n 150 "${{ github.workspace }}/logs/stage-a.log"; exit 1; }
+          mv /tmp/hold/*.sh scripts/ || true
+
+      - name: Build PSL1GHT SDK (only if the toolchain did not include it)
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        run: |
+          set -ex
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          if [ ! -x "$PS3DEV/bin/sprxlinker" ]; then
+            git clone --depth=1 https://github.com/ps3dev/PSL1GHT.git psl1ght-src
+            cd psl1ght-src
+            make install-ctrl
+            make install
+          fi
+
+      - name: Save core toolchain cache
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ps3dev
+          key: ps3dev-core-skycircuit-v3
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-logs
+          path: logs/
+          if-no-files-found: ignore
+
+      - name: Check toolchain
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          ls "$PS3DEV" "$PS3DEV/bin" "$PS3DEV/ppu/bin" || true
+          which powerpc64-ps3-elf-gcc powerpc64-ps3-elf-g++ sprxlinker || { echo "TOOLCHAIN MISSING - see listing above"; exit 1; }
+
+      - name: Build tiny3d
+        run: |
+          set -ex
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          export PS3DEV PSL1GHT
+          export PORTLIBS="$PS3DEV/portlibs/ppu"
+          mkdir -p "$PORTLIBS/include" "$PORTLIBS/lib"
+          git clone --depth=1 https://github.com/wargio/tiny3D.git tiny3d-src
+          # GCC 7.2 -O2 can miscompile (ps3toolchain issue #118); build tiny3d at -O1
+          grep -n -- '-O' tiny3d-src/lib/Makefile || true
+          sed -i 's/-O2/-O1/' tiny3d-src/lib/Makefile || true
+          make -C tiny3d-src/lib clean || true
+          make -C tiny3d-src/lib
+          make -C tiny3d-src/lib install
+          ls -l "$PORTLIBS/lib/libtiny3d.a" "$PORTLIBS/include/tiny3d.h"
+
+      - name: Build ELF
+        run: |
+          set -ex
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          export PS3DEV PSL1GHT
+          make
+
+      - name: Create SELF and PKG
+        run: |
+          set -ex
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          python3 tools/make_icon.py ICON0.PNG || true
+          mkdir -p build/pkg/USRDIR
+          # make already ran sprxlinker on build/skycircuit.elf via the .self rule
+          make_self_npdrm build/skycircuit.elf build/pkg/USRDIR/EBOOT.BIN "$CONTENTID" || make_self build/skycircuit.elf build/pkg/USRDIR/EBOOT.BIN
+          cp ICON0.PNG build/pkg/ICON0.PNG 2>/dev/null || true
+          SFO=$(command -v sfo || command -v sfo.py || true)
+          PKG=$(command -v pkg || command -v pkg.py || true)
+          echo "using SFO=$SFO PKG=$PKG"
+          [ -n "$SFO" ] && [ -n "$PKG" ] || { echo "sfo/pkg tool not found in:"; ls "$PS3DEV/bin"; exit 1; }
+          "$SFO" --title "$TITLE" --appid "$APPID" -f sfo.xml build/pkg/PARAM.SFO || true
+          "$PKG" --contentid "$CONTENTID" build/pkg build/skycircuit.pkg || true
+          ls -l build/skycircuit.pkg build/pkg/USRDIR/EBOOT.BIN build/pkg/PARAM.SFO 2>/dev/null || ls -l build/
+
+      - name: Upload PS3 Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sky-circuit-ps3
+          path: |
+            build/skycircuit.pkg
+            build/skycircuit.elf
+            build/*.elf
+          if-no-files-found: warn

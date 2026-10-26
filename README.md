@@ -1,4 +1,4 @@
-# Sky Circuit
+# Board Game
 
 Local 4-player couch multiplayer board game for PlayStation 3 (firmware 4.92 + HEN).
 
@@ -14,7 +14,7 @@ Built with **PSL1GHT** and **Tiny3D**.
 - Shops, positive/negative coin spaces, event spaces, hidden blocks
 - Dice roll with expressive token bounce on high rolls
 - RNG-based contest substitute (no full minigames in this version)
-- Automatic dual logging to `/dev_hdd0/tmp/skycircuit.log` **and** first available USB (`/dev_usb000` … `/dev_usb002`) for crash / hang / black-screen diagnosis
+- Automatic dual logging to `/dev_hdd0/tmp/boardgame.log` **and** first available USB (`/dev_usb000` … `/dev_usb002`) for crash / hang / black-screen diagnosis
 
 ## Build (GitHub Actions)
 
@@ -24,7 +24,7 @@ Push to `main` or run the workflow manually. The pipeline:
 2. Builds Tiny3D
 3. Compiles the ELF / SELF / PKG
 
-Artifact: `sky-circuit-ps3` containing the `.pkg`.
+Artifact: `board-game-ps3` containing the `.pkg`.
 
 ## Local build
 
@@ -47,8 +47,8 @@ make
 
 On every boot the logger opens both:
 
-- `/dev_hdd0/tmp/skycircuit.log`
-- `/dev_usb000/skycircuit.log` (falls back to 001 / 002)
+- `/dev_hdd0/tmp/boardgame.log`
+- `/dev_usb000/boardgame.log` (falls back to 001 / 002)
 
 Every major state transition, dice roll, land, shop action, star move and simulated contest is written with timestamp + function + line. Useful when the console freezes or shows a black screen.
 

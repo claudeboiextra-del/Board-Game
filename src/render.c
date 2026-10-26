@@ -152,7 +152,7 @@ void game_render(GameContext *g)
 {
     tiny3d_Clear(0xFF0D0D1A, TINY3D_CLEAR_ALL);
     tiny3d_AlphaTest(1, 0x10, TINY3D_ALPHA_FUNC_GEQUAL);
-    tiny3d_BlendFunc(TINY3D_BLEND_DEFAULT);
+    tiny3d_BlendFunc(0, 0, 0, 0); /* blending disabled for now - see chat notes */
 
     tiny3d_Project2D();
 

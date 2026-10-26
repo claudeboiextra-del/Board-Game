@@ -4,6 +4,7 @@
 #include "logger.h"
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 static void link(BoardNode *n, int a, int b)
 {

@@ -7,7 +7,6 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <sys/file.h>   /* PSL1GHT filesystem API (sysFsOpen, sysFsMkdir, etc.) */
-#include <sys/timer.h>
 
 #ifdef __cplusplus
 extern "C" {

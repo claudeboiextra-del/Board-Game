@@ -10,11 +10,8 @@
 #include <math.h>
 #include <string.h>
 
-/* Screen: 848 x 512 is the common Tiny3D 2D space for 720p letterbox-ish */
 #define SCR_W 848.0f
 #define SCR_H 512.0f
-
-/* ---------- primitives ---------- */
 
 static void draw_rect(float x, float y, float w, float h, u32 rgba)
 {
@@ -40,7 +37,6 @@ static void draw_circle(float cx, float cy, float r, u32 rgba, int segs)
     tiny3d_End();
 }
 
-/* Thick line between two points (rotated quad) */
 static void draw_line(float x1, float y1, float x2, float y2, float thickness, u32 rgba)
 {
     float dx = x2 - x1, dy = y2 - y1;
@@ -60,10 +56,7 @@ static void draw_line(float x1, float y1, float x2, float y2, float thickness, u
 static u32 player_color(int idx)
 {
     static const u32 cols[] = {
-        0xFFE74C3C, /* red    */
-        0xFF3498DB, /* blue   */
-        0xFF2ECC71, /* green  */
-        0xFFF1C40F  /* yellow */
+        0xFFE74C3C, 0xFF3498DB, 0xFF2ECC71, 0xFFF1C40F
     };
     return cols[idx & 3];
 }
@@ -76,20 +69,17 @@ static u32 player_color_dark(int idx)
     return cols[idx & 3];
 }
 
-/* ---------- tiny 3x5 bitmap font (digits + few letters) ---------- */
-
-/* Each glyph is 3 columns x 5 rows, bit 0 = top-left, row-major */
 static const unsigned char FONT3x5[][5] = {
-    /*0*/ {0x7,0x5,0x5,0x5,0x7},
-    /*1*/ {0x2,0x6,0x2,0x2,0x7},
-    /*2*/ {0x7,0x1,0x7,0x4,0x7},
-    /*3*/ {0x7,0x1,0x7,0x1,0x7},
-    /*4*/ {0x5,0x5,0x7,0x1,0x1},
-    /*5*/ {0x7,0x4,0x7,0x1,0x7},
-    /*6*/ {0x7,0x4,0x7,0x5,0x7},
-    /*7*/ {0x7,0x1,0x1,0x1,0x1},
-    /*8*/ {0x7,0x5,0x7,0x5,0x7},
-    /*9*/ {0x7,0x5,0x7,0x1,0x7},
+    {0x7,0x5,0x5,0x5,0x7},
+    {0x2,0x6,0x2,0x2,0x7},
+    {0x7,0x1,0x7,0x4,0x7},
+    {0x7,0x1,0x7,0x1,0x7},
+    {0x5,0x5,0x7,0x1,0x1},
+    {0x7,0x4,0x7,0x1,0x7},
+    {0x7,0x4,0x7,0x5,0x7},
+    {0x7,0x1,0x1,0x1,0x1},
+    {0x7,0x5,0x7,0x5,0x7},
+    {0x7,0x5,0x7,0x1,0x7},
 };
 
 static void draw_digit(float x, float y, int d, float s, u32 rgba)
@@ -115,7 +105,6 @@ static void draw_number(float x, float y, int value, float s, u32 rgba)
         draw_digit(x + i * (s * 4.0f), y, buf[i] - '0', s, rgba);
 }
 
-/* Simple block letters for a few labels (P, $, S, R) via rects */
 static void draw_label_P(float x, float y, float s, u32 c)
 {
     draw_rect(x, y, s, s * 5, c);
@@ -126,18 +115,15 @@ static void draw_label_P(float x, float y, float s, u32 c)
 
 static void draw_label_star(float x, float y, float r, u32 c)
 {
-    /* crude 4-point sparkle */
     draw_rect(x - r * 0.2f, y - r, r * 0.4f, r * 2, c);
     draw_rect(x - r, y - r * 0.2f, r * 2, r * 0.4f, c);
     draw_circle(x, y, r * 0.45f, c, 8);
 }
 
-/* ---------- board ---------- */
-
 static void space_style(SpaceType t, bool revealed, u32 *col, float *r)
 {
     *r = 14.0f;
-    *col = 0xFFBDC3C7; /* normal grey */
+    *col = 0xFFBDC3C7;
     switch (t) {
         case SPACE_PLUS_COIN:  *col = 0xFF2ECC71; *r = 15.0f; break;
         case SPACE_MINUS_COIN: *col = 0xFFE74C3C; *r = 15.0f; break;
@@ -178,12 +164,11 @@ static void draw_space_icon(float x, float y, SpaceType t, float r)
     }
 }
 
-static void node_screen(const BoardNode *n, float *ox, float *oy, float *sx, float *sy,
+static void node_screen(const BoardNode *n, float ox, float oy, float sx, float sy,
                         float *out_x, float *out_y)
 {
-    /* Map normalised 0..1 board coords into a playfield rectangle */
-    *out_x = *ox + n->x * (*sx);
-    *out_y = *oy + n->y * (*sy);
+    *out_x = ox + n->x * sx;
+    *out_y = oy + n->y * sy;
 }
 
 static void draw_board(GameContext *g)
@@ -193,33 +178,29 @@ static void draw_board(GameContext *g)
     float sx = 640.0f, sy = 360.0f;
     int i, j;
 
-    /* soft playfield panel */
     draw_rect(ox - 10, oy - 10, sx + 20, sy + 20, 0xFF1A2332);
     draw_rect(ox - 4,  oy - 4,  sx + 8,  sy + 8,  0xFF243447);
 
-    /* path links */
     for (i = 0; i < b->node_count; ++i) {
         BoardNode *n = &b->nodes[i];
         float x1, y1;
-        node_screen(n, &ox, &oy, &sx, &sy, &x1, &y1);
+        node_screen(n, ox, oy, sx, sy, &x1, &y1);
         for (j = 0; j < n->next_count; ++j) {
             BoardNode *m = &b->nodes[n->next[j]];
             float x2, y2;
-            node_screen(m, &ox, &oy, &sx, &sy, &x2, &y2);
+            node_screen(m, ox, oy, sx, sy, &x2, &y2);
             draw_line(x1, y1, x2, y2, 6.0f, 0xFF5D6D7E);
             draw_line(x1, y1, x2, y2, 2.5f, 0xFFAEB6BF);
         }
     }
 
-    /* spaces */
     for (i = 0; i < b->node_count; ++i) {
         BoardNode *n = &b->nodes[i];
         float x, y, r;
         u32 col;
-        node_screen(n, &ox, &oy, &sx, &sy, &x, &y);
+        node_screen(n, ox, oy, sx, sy, &x, &y);
         space_style(n->type, n->hidden_revealed, &col, &r);
 
-        /* pad shadow + body */
         draw_circle(x + 2, y + 3, r + 2, 0x66000000, 12);
         draw_circle(x, y, r + 2, 0xFF1C2833, 12);
         draw_circle(x, y, r, col, 12);
@@ -228,45 +209,30 @@ static void draw_board(GameContext *g)
     }
 }
 
-/* ---------- characters (chibi tokens) ---------- */
-
 static void draw_character(float x, float y, int color_idx, int facing, float bounce, int idle_frame)
 {
     u32 body = player_color(color_idx);
     u32 dark = player_color_dark(color_idx);
     float by = y - bounce;
+    float ex = facing >= 0 ? 3.0f : -3.0f;
 
-    /* shadow */
     draw_circle(x, y + 10, 12.0f, 0x55000000, 10);
 
-    /* legs */
     draw_rect(x - 8, by + 6, 6, 10, dark);
     draw_rect(x + 2, by + 6, 6, 10, dark);
 
-    /* body */
     draw_circle(x, by - 2, 14.0f, body, 14);
-    draw_circle(x, by - 2, 14.0f, body, 14);
-
-    /* belly highlight */
     draw_circle(x, by + 2, 7.0f, 0x33FFFFFF, 8);
 
-    /* head */
-    draw_circle(x, by - 18, 12.0f, body, 12);
     draw_circle(x, by - 18, 12.0f, body, 12);
 
-    /* eyes */
-    {
-        float ex = facing >= 0 ? 3.0f : -3.0f;
-        draw_circle(x - 4 + ex * 0.3f, by - 20, 3.2f, 0xFFFFFFFF, 8);
-        draw_circle(x + 4 + ex * 0.3f, by - 20, 3.2f, 0xFFFFFFFF, 8);
-        draw_circle(x - 4 + ex, by - 20, 1.6f, 0xFF1A1A1A, 6);
-        draw_circle(x + 4 + ex, by - 20, 1.6f, 0xFF1A1A1A, 6);
-    }
+    draw_circle(x - 4 + ex * 0.3f, by - 20, 3.2f, 0xFFFFFFFF, 8);
+    draw_circle(x + 4 + ex * 0.3f, by - 20, 3.2f, 0xFFFFFFFF, 8);
+    draw_circle(x - 4 + ex, by - 20, 1.6f, 0xFF1A1A1A, 6);
+    draw_circle(x + 4 + ex, by - 20, 1.6f, 0xFF1A1A1A, 6);
 
-    /* smile */
     draw_rect(x - 4, by - 12, 8, 2, 0xFF1A1A1A);
 
-    /* idle bob ear/tuft */
     if ((idle_frame / 20) & 1)
         draw_circle(x + 10, by - 28, 3.5f, dark, 6);
     else
@@ -286,7 +252,7 @@ static void draw_tokens(GameContext *g)
         float bounce = 0.0f;
         float stack = (float)(i % 4) * 10.0f - 15.0f;
 
-        node_screen(n, &ox, &oy, &sx, &sy, &x, &y);
+        node_screen(n, ox, oy, sx, sy, &x, &y);
         x += stack;
 
         if (p->celebrating)
@@ -298,35 +264,31 @@ static void draw_tokens(GameContext *g)
     }
 }
 
-/* ---------- dice ---------- */
-
 static void draw_die_face(float cx, float cy, float size, int value, u32 body, u32 pip)
 {
     float h = size * 0.5f;
     float pr = size * 0.09f;
+    float o = size * 0.22f;
+    int v = value;
+    if (v < 1) v = 1;
+    if (v > 6) v = 6;
+
     draw_rect(cx - h, cy - h, size, size, 0xFF1A1A1A);
     draw_rect(cx - h + 3, cy - h + 3, size - 6, size - 6, body);
 
-    /* pip positions for 1..6 */
-    {
-        float o = size * 0.22f;
-        int v = value;
-        if (v < 1) v = 1;
-        if (v > 6) v = 6;
-        if (v == 1 || v == 3 || v == 5)
-            draw_circle(cx, cy, pr, pip, 8);
-        if (v >= 2) {
-            draw_circle(cx - o, cy - o, pr, pip, 8);
-            draw_circle(cx + o, cy + o, pr, pip, 8);
-        }
-        if (v >= 4) {
-            draw_circle(cx + o, cy - o, pr, pip, 8);
-            draw_circle(cx - o, cy + o, pr, pip, 8);
-        }
-        if (v == 6) {
-            draw_circle(cx - o, cy, pr, pip, 8);
-            draw_circle(cx + o, cy, pr, pip, 8);
-        }
+    if (v == 1 || v == 3 || v == 5)
+        draw_circle(cx, cy, pr, pip, 8);
+    if (v >= 2) {
+        draw_circle(cx - o, cy - o, pr, pip, 8);
+        draw_circle(cx + o, cy + o, pr, pip, 8);
+    }
+    if (v >= 4) {
+        draw_circle(cx + o, cy - o, pr, pip, 8);
+        draw_circle(cx - o, cy + o, pr, pip, 8);
+    }
+    if (v == 6) {
+        draw_circle(cx - o, cy, pr, pip, 8);
+        draw_circle(cx + o, cy, pr, pip, 8);
     }
 }
 
@@ -336,7 +298,6 @@ static void draw_dice(GameContext *g)
     float pulse = 1.0f + 0.08f * sinf(g->anim_t * 8.0f);
 
     if (g->state == STATE_DICE_ROLL) {
-        /* spinning nonsense face while waiting for confirm */
         int spin = 1 + ((int)(g->anim_t * 12.0f) % 6);
         draw_die_face(cx, cy, 64.0f * pulse, spin, 0xFFFFFFFF, 0xFF1A1A1A);
     } else if (g->dice_value > 0 &&
@@ -347,13 +308,10 @@ static void draw_dice(GameContext *g)
     }
 }
 
-/* ---------- HUD ---------- */
-
 static void draw_hud(GameContext *g)
 {
     int i;
 
-    /* top bar */
     draw_rect(0, 0, SCR_W, 56, 0xEE0D1117);
     draw_rect(0, 56, SCR_W, 3, 0xFF3498DB);
 
@@ -362,33 +320,27 @@ static void draw_hud(GameContext *g)
         float bx = 16.0f + i * 200.0f;
         u32 col = player_color(p->color);
 
-        /* panel */
         draw_rect(bx, 6, 188, 44, 0xFF1C2833);
         if (i == g->current_player)
             draw_rect(bx, 6, 188, 44, 0x443498DB);
 
-        /* mini face */
         draw_circle(bx + 22, 28, 14, col, 10);
         draw_circle(bx + 18, 25, 3, 0xFFFFFFFF, 6);
         draw_circle(bx + 26, 25, 3, 0xFFFFFFFF, 6);
         draw_circle(bx + 18, 25, 1.4f, 0xFF111111, 5);
         draw_circle(bx + 26, 25, 1.4f, 0xFF111111, 5);
 
-        /* P# */
         draw_label_P(bx + 42, 12, 3.0f, 0xFFFFFFFF);
         draw_digit(bx + 56, 12, i + 1, 3.0f, 0xFFFFFFFF);
 
-        /* stars */
         draw_label_star(bx + 90, 18, 7.0f, 0xFFF1C40F);
         draw_number(bx + 102, 12, p->stars, 3.0f, 0xFFF1C40F);
 
-        /* coins */
         draw_circle(bx + 140, 20, 7.0f, 0xFFF39C12, 8);
         draw_circle(bx + 140, 20, 4.0f, 0xFFF1C40F, 8);
         draw_number(bx + 152, 12, p->coins, 3.0f, 0xFFF39C12);
     }
 
-    /* round strip */
     {
         float prog = (g->max_rounds > 0)
             ? (float)g->round / (float)g->max_rounds : 0.0f;
@@ -399,28 +351,21 @@ static void draw_hud(GameContext *g)
     }
 }
 
-/* ---------- screens ---------- */
-
 static void draw_title(GameContext *g)
 {
     float bob = sinf(g->anim_t * 2.5f) * 8.0f;
 
     draw_rect(0, 0, SCR_W, SCR_H, 0xFF0B1320);
-
-    /* big soft panels */
     draw_rect(120, 100, 608, 280, 0xFF162033);
     draw_rect(140, 120, 568, 240, 0xFF1B2838);
 
-    /* four mascots bouncing on the title card */
     draw_character(220, 300 + bob, 0, 1, fabsf(sinf(g->anim_t * 5)) * 10, (int)g->frame);
     draw_character(340, 300 - bob, 1, 1, fabsf(sinf(g->anim_t * 5 + 1)) * 10, (int)g->frame);
     draw_character(460, 300 + bob * 0.7f, 2, -1, fabsf(sinf(g->anim_t * 5 + 2)) * 10, (int)g->frame);
     draw_character(580, 300 - bob * 0.7f, 3, -1, fabsf(sinf(g->anim_t * 5 + 3)) * 10, (int)g->frame);
 
-    /* star sparkle */
     draw_label_star(424, 160 + bob * 0.3f, 18.0f + 4.0f * sinf(g->anim_t * 3), 0xFFF1C40F);
 
-    /* press-start hint as blinking bar */
     if (((int)(g->anim_t * 2)) & 1)
         draw_rect(300, 400, 248, 14, 0xFF2ECC71);
 }
@@ -438,7 +383,6 @@ static void draw_results(GameContext *g)
     draw_rect(0, 0, SCR_W, SCR_H, 0xFF0B1320);
     draw_rect(180, 80, 488, 340, 0xFF162033);
 
-    /* winner character big */
     draw_character(424, 280, g->players[best].color, 1,
                    fabsf(sinf(g->anim_t * 6)) * 14, (int)g->frame);
 
@@ -451,9 +395,11 @@ void game_render(GameContext *g)
 {
     tiny3d_Clear(0xFF0B1320, TINY3D_CLEAR_ALL);
     tiny3d_AlphaTest(1, 0x10, TINY3D_ALPHA_FUNC_GEQUAL);
-    tiny3d_BlendFunc(TINY3D_BLEND_FUNC_SRC_RGB_SRC_ALPHA | TINY3D_BLEND_FUNC_SRC_ALPHA_SRC_ALPHA,
-                     TINY3D_BLEND_FUNC_DST_RGB_ONE_MINUS_SRC_ALPHA | TINY3D_BLEND_FUNC_DST_ALPHA_ZERO,
-                     TINY3D_BLEND_RGB_FUNC_ADD | TINY3D_BLEND_ALPHA_FUNC_ADD);
+    /* enable, src, dst, func — standard alpha blend */
+    tiny3d_BlendFunc(1,
+        (blend_src_func)(TINY3D_BLEND_FUNC_SRC_RGB_SRC_ALPHA | TINY3D_BLEND_FUNC_SRC_ALPHA_SRC_ALPHA),
+        (blend_dst_func)(TINY3D_BLEND_FUNC_DST_RGB_ONE_MINUS_SRC_ALPHA | TINY3D_BLEND_FUNC_DST_ALPHA_ZERO),
+        (blend_func)(TINY3D_BLEND_RGB_FUNC_ADD | TINY3D_BLEND_ALPHA_FUNC_ADD));
 
     tiny3d_Project2D();
 
@@ -467,7 +413,6 @@ void game_render(GameContext *g)
         draw_rect(0, 0, SCR_W, SCR_H, 0xFF0B1320);
         draw_board(g);
         draw_tokens(g);
-        /* selection hint bar */
         draw_rect(200, 460, 448, 20, 0xFF2C3E50);
         if (((int)(g->anim_t * 3)) & 1)
             draw_rect(220, 465, 408, 10, 0xFF3498DB);
@@ -486,11 +431,8 @@ void game_render(GameContext *g)
         draw_tokens(g);
         draw_hud(g);
         draw_dice(g);
-
-        /* shop banner */
         if (g->state == STATE_SHOP)
             draw_rect(300, 60, 248, 18, 0xFFE67E22);
-        /* contest banner */
         if (g->state == STATE_MINIGAME_SIM)
             draw_rect(300, 60, 248, 18, 0xFF9B59B6);
         break;

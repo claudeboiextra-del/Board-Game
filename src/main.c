@@ -14,7 +14,6 @@
 #include <io/pad.h>
 #include <sys/spu.h>
 #include <sys/thread.h>
-#include <sys/timer.h>
 
 #include <tiny3d.h>
 

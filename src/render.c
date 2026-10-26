@@ -1,5 +1,5 @@
 /*
- * Tiny3D rendering for Sky Circuit
+ * Tiny3D rendering for Board Game
  * Retro *feel* (bouncy tokens, punchy colour pulses, simple particle-ish
  * flashes) without trying to look like a specific console generation.
  */

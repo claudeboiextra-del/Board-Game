@@ -8,6 +8,8 @@
 #define MAX_NODES       64
 #define MAX_ROUNDS_OPTS 4
 #define BOARD_COUNT     2
+#define MAX_ITEMS       2
+#define MAX_FX          24
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -27,9 +29,10 @@ typedef enum {
     STATE_BOARD_SELECT,
     STATE_MATCH,
     STATE_TURN_START,
+    STATE_ITEM,
     STATE_DICE_ROLL,
     STATE_MOVE,
-    STATE_BRANCH,         /* human picks path at fork */
+    STATE_BRANCH,
     STATE_LAND,
     STATE_SHOP,
     STATE_ROUND_END,
@@ -44,6 +47,14 @@ typedef enum {
     DIFF_HARD
 } CpuDiff;
 
+typedef enum {
+    ITEM_NONE = 0,
+    ITEM_DOUBLE_DICE,
+    ITEM_BOOST,
+    ITEM_STEAL,
+    ITEM_SHIELD
+} ItemType;
+
 typedef struct {
     int  id;
     bool is_human;
@@ -53,9 +64,12 @@ typedef struct {
     int  node;
     int  color;
     bool celebrating;
-    /* smooth display position (lerped toward node) */
     float disp_x, disp_y;
-    float hop_t;          /* 0..1 during a hop */
+    float hop_t;
+    ItemType items[MAX_ITEMS];
+    int  item_count;
+    bool shielded;
+    int  team;
 } Player;
 
 typedef struct {
@@ -75,14 +89,21 @@ typedef struct {
     int         star_node;
 } Board;
 
-/* short on-screen popup (coins gained/lost, star, etc.) */
 typedef struct {
     int   active;
     float x, y;
-    int   value;          /* +coins or flag */
-    int   kind;           /* 0=coin, 1=star, 2=bad, 3=shop, 4=event */
-    float life;           /* counts down */
+    int   value;
+    int   kind;
+    float life;
 } Popup;
+
+typedef struct {
+    int   active;
+    float x, y;
+    float vx, vy;
+    float life;
+    uint32_t color;
+} FxSpark;
 
 typedef struct {
     GameState  state;
@@ -94,19 +115,26 @@ typedef struct {
     int        round;
     int        max_rounds;
     int        dice_value;
+    int        dice_value2;
     int        move_remaining;
     uint32_t   frame;
     float      anim_t;
     bool       star_relocated_this_round;
 
-    /* pacing / juice */
-    int        state_timer;       /* frames spent in current state */
-    int        hop_cooldown;      /* frames between hops */
-    int        branch_choice;     /* selected fork index */
-    int        land_flash;        /* frames of land highlight */
+    int        state_timer;
+    int        hop_cooldown;
+    int        branch_choice;
+    int        land_flash;
     int        last_land_type;
     Popup      popup;
     int        contest_rewards[MAX_PLAYERS];
+
+    bool       team_mode;
+    bool       double_dice;
+    int        item_cursor;
+    int        boost_steps;
+
+    FxSpark    fx[MAX_FX];
 } GameContext;
 
 void game_init(GameContext *g);

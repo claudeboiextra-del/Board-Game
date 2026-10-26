@@ -14,6 +14,7 @@
 #include <io/pad.h>
 #include <sys/spu.h>
 #include <sys/thread.h>
+#include <sys/timer.h>
 
 #include <tiny3d.h>
 
@@ -28,7 +29,7 @@ static void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
 {
     (void)param; (void)userdata;
     switch (status) {
-        case CELL_SYSUTIL_REQUEST_EXITGAME:
+        case SYSUTIL_EXIT_GAME:
             LOG_I("Sysutil exit requested");
             running = 0;
             break;
@@ -94,7 +95,7 @@ int main(int argc, char *argv[])
         }
 
         /* light frame pacing – keep CPU cool, feel responsive */
-        sys_timer_usleep(16000); /* ~60 fps target */
+        usleep(16000); /* ~60 fps target */
     }
 
     game_shutdown(&game);

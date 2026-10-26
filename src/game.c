@@ -1,6 +1,4 @@
-/* Board Game core
- * Minigames: Mash, Timing, Reaction, Hold, Count — snappy pacing + SFX
- */
+/* Board Game core – Jamboree-style pacing, board tactics, 7 minigames */
 #include "game.h"
 #include "logger.h"
 #include "audio_sfx.h"
@@ -12,19 +10,21 @@
 static Board g_boards[BOARD_COUNT];
 
 #define HOP_FRAMES 6
-#define LAND_HOLD 22
-#define DICE_CPU_DELAY 22
-#define ROUND_HOLD 28
-#define ITEM_CPU_DELAY 14
-#define MG_INTRO_HOLD 50
-#define MG_RESULT_HOLD 70
+#define LAND_HOLD 20
+#define DICE_CPU_DELAY 20
+#define ROUND_HOLD 24
+#define ITEM_CPU_DELAY 12
+#define MG_INTRO_HOLD 45
+#define MG_RESULT_HOLD 65
 #define MG_MASH_TIME 100
-#define MG_TIMING_TIME 140
-#define MG_REACT_MAX 120
-#define MG_HOLD_MAX 120
-#define MG_COUNT_MAX 130
+#define MG_TIMING_TIME 130
+#define MG_REACT_MAX 110
+#define MG_HOLD_MAX 110
+#define MG_COUNT_MAX 120
+#define MG_AVOID_MAX 130
+#define MG_ZONE_MAX 140
 
-static const int MG_PAYOUT[4] = {15, 10, 5, 2};
+static const int MG_PAYOUT[4] = {18, 12, 6, 3};
 
 static int rand_range(int lo, int hi) {
     if (hi <= lo) return lo;
@@ -70,32 +70,59 @@ static ItemType take_item(Player *p, int slot) {
 }
 
 static ItemType random_item(void) {
-    static const ItemType pool[] = {ITEM_DOUBLE_DICE, ITEM_BOOST, ITEM_STEAL, ITEM_SHIELD, ITEM_BOOST};
-    return pool[rand_range(0, 4)];
+    static const ItemType pool[] = {
+        ITEM_DOUBLE_DICE, ITEM_BOOST, ITEM_STEAL, ITEM_SHIELD, ITEM_SWAP, ITEM_BOOST
+    };
+    return pool[rand_range(0, 5)];
+}
+
+/* lowest stars, then lowest coins – for comeback */
+static int find_last_place(GameContext *g) {
+    int best = 0, i;
+    for (i = 1; i < g->player_count; ++i) {
+        if (g->players[i].stars < g->players[best].stars ||
+            (g->players[i].stars == g->players[best].stars &&
+             g->players[i].coins < g->players[best].coins))
+            best = i;
+    }
+    return best;
+}
+
+static int star_cost_for(GameContext *g, Player *p) {
+    /* trailing players get a discount – soft comeback */
+    int last = find_last_place(g);
+    if (p->id == last && g->player_count > 1) return 15;
+    return 20;
 }
 
 static void mg_begin(GameContext *g) {
     int i;
     g->mg_type = (MiniGameType)rand_range(0, MG_TYPE_COUNT - 1);
     g->mg_timer = 0; g->mg_meter = 0; g->mg_marker = 0.12f; g->mg_marker_dir = 1;
-    g->mg_go_at = 35 + rand_range(0, 40); g->mg_pressed = 0; g->mg_human_score = 0;
+    g->mg_go_at = 30 + rand_range(0, 40); g->mg_pressed = 0; g->mg_human_score = 0;
     g->mg_awarded = false; g->mg_hold_frames = 0; g->mg_flash_count = 0; g->mg_phase = 0;
     g->mg_target = 40 + rand_range(0, 25);
+    g->mg_zone_c = 0.5f; g->mg_zone_w = 0.14f; g->mg_zone_hits = 0;
     if (g->mg_type == MG_COUNT) {
         g->mg_target = 3 + rand_range(0, 3);
-        g->mg_next_flash = 18;
+        g->mg_next_flash = 16;
+    }
+    if (g->mg_type == MG_AVOID) {
+        g->mg_phase = 0; /* 0 red danger, 1 green go */
+        g->mg_go_at = 25 + rand_range(0, 35);
+        g->mg_target = g->mg_go_at + 35 + rand_range(0, 25); /* green window end */
     }
     for (i = 0; i < g->player_count; ++i) { g->players[i].mg_score = 0; g->players[i].mg_rank = i; }
     g->state = STATE_MG_INTRO; g->state_timer = 0;
     sfx_play(SFX_CLICK);
-    LOG_I("Minigame type %d target %d", (int)g->mg_type, g->mg_target);
+    LOG_I("Minigame type %d", (int)g->mg_type);
 }
 
 static int cpu_mg_score(Player *p, MiniGameType t) {
     int base = 55, noise = rand_range(-15, 15);
     if (p->diff == DIFF_HARD) base = 78;
     else if (p->diff == DIFF_EASY) base = 35;
-    if (t == MG_HOLD || t == MG_COUNT) base += 3;
+    if (t == MG_HOLD || t == MG_COUNT || t == MG_ZONE) base += 2;
     base += noise; if (base < 5) base = 5; if (base > 100) base = 100;
     return base;
 }
@@ -136,7 +163,7 @@ void game_init(GameContext *g) {
     memset(g, 0, sizeof(*g)); srand((unsigned)time(NULL));
     board_load_visual(&g_boards[0]); board_load_geo(&g_boards[1]);
     g->state = STATE_TITLE; g->board = &g_boards[0];
-    g->player_count = 4; g->max_rounds = 15;
+    g->player_count = 4; g->max_rounds = 12;
     for (i = 0; i < MAX_PLAYERS; ++i) {
         float x, y;
         g->players[i].id = i; g->players[i].is_human = (i == 0);
@@ -152,7 +179,9 @@ void game_init(GameContext *g) {
 static void relocate_star(GameContext *g) {
     int tries = 0, new_node;
     do { new_node = rand_range(0, g->board->node_count - 1); tries++; }
-    while ((g->board->nodes[new_node].type == SPACE_SHOP || new_node == g->board->star_node) && tries < 40);
+    while ((g->board->nodes[new_node].type == SPACE_SHOP ||
+            g->board->nodes[new_node].type == SPACE_WARP ||
+            new_node == g->board->star_node) && tries < 40);
     if (g->board->nodes[g->board->star_node].type == SPACE_STAR)
         g->board->nodes[g->board->star_node].type = SPACE_NORMAL;
     g->board->star_node = new_node;
@@ -168,8 +197,10 @@ static int cpu_choose_path(GameContext *g, Player *p, int from) {
         int cand = n->next[i], score = 0;
         SpaceType t = g->board->nodes[cand].type;
         if (t == SPACE_STAR) score += 50;
-        if (t == SPACE_PLUS_COIN) score += 10;
+        if (t == SPACE_PLUS_COIN) score += 12;
         if (t == SPACE_SHOP) score += 8;
+        if (t == SPACE_WARP) score += (p->diff == DIFF_HARD) ? -5 : 5;
+        if (t == SPACE_HAZARD) score -= 12;
         if (t == SPACE_MINUS_COIN) score -= 15;
         if (p->diff == DIFF_HARD) score += rand_range(0, 5);
         else if (p->diff == DIFF_EASY) score += rand_range(-20, 20);
@@ -188,7 +219,7 @@ static void start_hop(GameContext *g, Player *p, int next_node) {
 
 static void apply_land(GameContext *g, Player *p) {
     BoardNode *n = &g->board->nodes[p->node];
-    float px, py; int delta;
+    float px, py; int delta, cost, dest;
     node_world(g, p->node, &px, &py);
     g->last_land_type = (int)n->type; g->land_flash = LAND_HOLD;
     sfx_play(SFX_LAND);
@@ -207,35 +238,61 @@ static void apply_land(GameContext *g, Player *p) {
         case SPACE_SHOP:
             spawn_popup(g, px, py - 30, 0, 3); g->state = STATE_SHOP; g->state_timer = 0; g->item_cursor = 0; return;
         case SPACE_STAR:
-            if (p->coins >= 20) { p->coins -= 20; p->stars += 1; spawn_popup(g, px, py - 30, 1, 1);
+            cost = star_cost_for(g, p);
+            if (p->coins >= cost) { p->coins -= cost; p->stars += 1; spawn_popup(g, px, py - 30, 1, 1);
                 spawn_fx(g, px, py, 0xFFF1C40F, 12); p->celebrating = true; relocate_star(g); sfx_play(SFX_STAR); }
             else { spawn_popup(g, px, py - 30, 0, 2); sfx_play(SFX_FAIL); } break;
         case SPACE_HIDDEN_COIN:
             if (!n->hidden_revealed) { n->hidden_revealed = true; p->coins += 12; spawn_popup(g, px, py - 30, 12, 0); spawn_fx(g, px, py, 0xFF1ABC9C, 8); sfx_play(SFX_COIN); } break;
         case SPACE_HIDDEN_STAR:
             if (!n->hidden_revealed) { n->hidden_revealed = true; p->stars += 1; spawn_popup(g, px, py - 30, 1, 1); spawn_fx(g, px, py, 0xFFF1C40F, 10); p->celebrating = true; sfx_play(SFX_STAR); } break;
+        case SPACE_WARP:
+            dest = rand_range(0, g->board->node_count - 1);
+            p->node = dest; p->hop_t = 0;
+            node_world(g, dest, &px, &py);
+            p->disp_x = px; p->disp_y = py;
+            spawn_popup(g, px, py - 30, 0, 4); spawn_fx(g, px, py, 0xFF1ABC9C, 10); sfx_play(SFX_CLICK);
+            break;
+        case SPACE_HAZARD:
+            if (rand_range(0, 1) == 0) {
+                delta = 2 + rand_range(0, 2);
+                if (p->shielded) { p->shielded = false; spawn_popup(g, px, py - 30, 0, 5); }
+                else { p->coins -= delta; if (p->coins < 0) p->coins = 0;
+                    spawn_popup(g, px, py - 30, -delta, 2); sfx_play(SFX_FAIL); }
+            } else {
+                p->coins += 4; spawn_popup(g, px, py - 30, 4, 0); sfx_play(SFX_COIN);
+            }
+            spawn_fx(g, px, py, 0xFFE67E22, 8);
+            break;
         default: break;
     }
 }
 
 static void do_shop(GameContext *g, Player *p, uint32_t buttons) {
+    int cost = star_cost_for(g, p);
     if (!p->is_human) {
-        if (g->state_timer < 16) return;
-        if (p->coins >= 20 && (p->stars < 3 || p->diff == DIFF_HARD)) { p->coins -= 20; p->stars += 1; relocate_star(g); sfx_play(SFX_STAR); }
-        else if (p->coins >= 8 && p->item_count < MAX_ITEMS) { p->coins -= 8; give_item(p, random_item()); sfx_play(SFX_COIN); }
+        if (g->state_timer < 14) return;
+        if (p->coins >= cost && (p->stars < 3 || p->diff == DIFF_HARD)) {
+            p->coins -= cost; p->stars += 1; relocate_star(g); sfx_play(SFX_STAR);
+        } else if (p->coins >= 8 && p->item_count < MAX_ITEMS) {
+            p->coins -= 8; give_item(p, random_item()); sfx_play(SFX_COIN);
+        }
         g->state = STATE_TURN_START; return;
     }
     if (buttons & 0x20) { g->item_cursor = (g->item_cursor + 1) % 3; sfx_play(SFX_CLICK); }
     if (buttons & 0x10) {
-        if (g->item_cursor == 0 && p->coins >= 20) { p->coins -= 20; p->stars += 1; relocate_star(g); p->celebrating = true; sfx_play(SFX_STAR); }
-        else if (g->item_cursor == 1 && p->coins >= 8 && p->item_count < MAX_ITEMS) { p->coins -= 8; give_item(p, random_item()); sfx_play(SFX_COIN); }
-        else sfx_play(SFX_CLICK);
+        if (g->item_cursor == 0 && p->coins >= cost) {
+            p->coins -= cost; p->stars += 1; relocate_star(g); p->celebrating = true; sfx_play(SFX_STAR);
+        } else if (g->item_cursor == 1 && p->coins >= 8 && p->item_count < MAX_ITEMS) {
+            p->coins -= 8; give_item(p, random_item()); sfx_play(SFX_COIN);
+        } else sfx_play(SFX_CLICK);
         g->state = STATE_TURN_START;
     }
 }
 
 static void use_item(GameContext *g, Player *p, int slot) {
-    ItemType it = take_item(p, slot); int i, best = -1, best_coins = -1;
+    ItemType it = take_item(p, slot); int i, best = -1, best_val = -1;
+    float tx, ty;
     sfx_play(SFX_CLICK);
     switch (it) {
         case ITEM_DOUBLE_DICE: g->double_dice = true; spawn_popup(g, p->disp_x, p->disp_y - 40, 2, 5); break;
@@ -244,7 +301,7 @@ static void use_item(GameContext *g, Player *p, int slot) {
             for (i = 0; i < g->player_count; ++i) {
                 if (i == p->id) continue;
                 if (g->team_mode && g->players[i].team == p->team) continue;
-                if (g->players[i].coins > best_coins) { best_coins = g->players[i].coins; best = i; }
+                if (g->players[i].coins > best_val) { best_val = g->players[i].coins; best = i; }
             }
             if (best >= 0) {
                 int steal = (g->players[best].coins >= 5) ? 5 : g->players[best].coins;
@@ -252,8 +309,34 @@ static void use_item(GameContext *g, Player *p, int slot) {
                 spawn_popup(g, p->disp_x, p->disp_y - 40, steal, 0); sfx_play(SFX_COIN);
             } break;
         case ITEM_SHIELD: p->shielded = true; spawn_popup(g, p->disp_x, p->disp_y - 40, 1, 5); break;
+        case ITEM_SWAP:
+            /* swap board position with the star leader (or richest) */
+            for (i = 0; i < g->player_count; ++i) {
+                if (i == p->id) continue;
+                if (g->team_mode && g->players[i].team == p->team) continue;
+                int val = g->players[i].stars * 100 + g->players[i].coins;
+                if (val > best_val) { best_val = val; best = i; }
+            }
+            if (best >= 0) {
+                int tmp = p->node;
+                p->node = g->players[best].node;
+                g->players[best].node = tmp;
+                node_world(g, p->node, &tx, &ty); p->disp_x = tx; p->disp_y = ty; p->hop_t = 1;
+                node_world(g, g->players[best].node, &tx, &ty);
+                g->players[best].disp_x = tx; g->players[best].disp_y = ty;
+                spawn_popup(g, p->disp_x, p->disp_y - 40, 0, 4); sfx_play(SFX_CLICK);
+            }
+            break;
         default: break;
     }
+}
+
+static void apply_comeback(GameContext *g) {
+    int last = find_last_place(g);
+    if (g->player_count < 2) return;
+    g->players[last].coins += 5;
+    spawn_popup(g, g->players[last].disp_x, g->players[last].disp_y - 30, 5, 0);
+    sfx_play(SFX_COIN);
 }
 
 static void next_player(GameContext *g) {
@@ -261,12 +344,20 @@ static void next_player(GameContext *g) {
     for (i = 0; i < g->player_count; ++i) g->players[i].celebrating = false;
     g->current_player = (g->current_player + 1) % g->player_count;
     if (g->current_player == 0) {
-        g->round++; relocate_star(g); g->state = STATE_ROUND_END; g->state_timer = 0;
+        /* end of full turn cycle → round end + minigame every round */
+        g->round++;
+        relocate_star(g);
+        apply_comeback(g);
         if (g->round > g->max_rounds) {
             g->state = STATE_RESULTS;
             sfx_play(SFX_WIN);
+        } else {
+            g->state = STATE_ROUND_END;
+            g->state_timer = 0;
         }
-    } else { g->state = STATE_TURN_START; g->state_timer = 0; }
+    } else {
+        g->state = STATE_TURN_START; g->state_timer = 0;
+    }
 }
 
 static void update_fx(GameContext *g) {
@@ -366,8 +457,7 @@ void game_update(GameContext *g, uint32_t buttons) {
                 else { g->dice_value2 = 0; g->move_remaining = g->dice_value + g->boost_steps; }
                 p->celebrating = (g->move_remaining >= 8);
                 g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 2;
-                spawn_fx(g, 760, 120, 0xFFFFFFFF, 8);
-                sfx_play(SFX_DICE);
+                spawn_fx(g, 760, 120, 0xFFFFFFFF, 8); sfx_play(SFX_DICE);
             }
         } else if (g->state_timer >= DICE_CPU_DELAY) {
             int bias = (p->diff == DIFF_HARD) ? 1 : (p->diff == DIFF_EASY ? -1 : 0);
@@ -376,8 +466,7 @@ void game_update(GameContext *g, uint32_t buttons) {
             if (g->double_dice) { g->dice_value2 = rand_range(1, 6); g->move_remaining = g->dice_value + g->dice_value2 + g->boost_steps; }
             else { g->dice_value2 = 0; g->move_remaining = g->dice_value + g->boost_steps; }
             p->celebrating = (g->move_remaining >= 8);
-            g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 2;
-            sfx_play(SFX_DICE);
+            g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 2; sfx_play(SFX_DICE);
         } break;
     case STATE_MOVE:
         if (g->move_remaining <= 0) { g->state = STATE_LAND; g->state_timer = 0; break; }
@@ -396,17 +485,20 @@ void game_update(GameContext *g, uint32_t buttons) {
     case STATE_LAND:
         if (g->state_timer == 1) apply_land(g, p);
         if (g->state == STATE_SHOP) break;
-        if (g->state_timer >= LAND_HOLD) {
-            if ((g->round % 3) == 0 && g->current_player == g->player_count - 1) mg_begin(g);
-            else next_player(g);
-        } break;
+        if (g->state_timer >= LAND_HOLD) next_player(g);
+        break;
     case STATE_SHOP:
         do_shop(g, p, buttons); if (g->state != STATE_SHOP) next_player(g); break;
+    case STATE_ROUND_END:
+        /* short beat then always go to minigame */
+        if (g->state_timer >= ROUND_HOLD) mg_begin(g);
+        break;
     case STATE_MG_INTRO:
         if (g->state_timer >= MG_INTRO_HOLD || (buttons & 0x10)) {
             g->state = STATE_MG_PLAY; g->state_timer = 0; g->mg_timer = 0;
             g->mg_meter = 0; g->mg_marker = 0.12f; g->mg_marker_dir = 1;
             g->mg_pressed = 0; g->mg_human_score = 0; g->mg_hold_frames = 0;
+            g->mg_zone_hits = 0;
             if (buttons & 0x10) sfx_play(SFX_CLICK);
         } break;
     case STATE_MG_PLAY:
@@ -426,7 +518,7 @@ void game_update(GameContext *g, uint32_t buttons) {
             }
             break;
         case MG_TIMING:
-            g->mg_marker += g->mg_marker_dir * 0.022f;
+            g->mg_marker += g->mg_marker_dir * 0.024f;
             if (g->mg_marker >= 1) { g->mg_marker = 1; g->mg_marker_dir = -1; }
             if (g->mg_marker <= 0) { g->mg_marker = 0; g->mg_marker_dir = 1; }
             if (buttons & 0x10 && !g->mg_pressed) {
@@ -438,8 +530,7 @@ void game_update(GameContext *g, uint32_t buttons) {
                 sfx_play(g->mg_human_score > 70 ? SFX_COIN : SFX_CLICK);
                 mg_finish_play(g);
             } else if (g->mg_timer >= MG_TIMING_TIME) {
-                g->mg_human_score = 5;
-                mg_finish_play(g);
+                g->mg_human_score = 5; mg_finish_play(g);
             }
             break;
         case MG_HOLD:
@@ -457,8 +548,7 @@ void game_update(GameContext *g, uint32_t buttons) {
                 sfx_play(g->mg_human_score > 70 ? SFX_COIN : SFX_CLICK);
                 mg_finish_play(g);
             } else if (g->mg_timer >= MG_HOLD_MAX) {
-                g->mg_human_score = 5;
-                mg_finish_play(g);
+                g->mg_human_score = 5; mg_finish_play(g);
             }
             break;
         case MG_COUNT:
@@ -470,12 +560,10 @@ void game_update(GameContext *g, uint32_t buttons) {
                     sfx_play(SFX_COUNT_FLASH);
                 }
                 if (g->mg_flash_count >= g->mg_target && g->mg_timer > g->mg_next_flash + 15) {
-                    g->mg_phase = 1;
-                    g->mg_meter = 0;
+                    g->mg_phase = 1; g->mg_meter = 0;
                 }
             } else {
-                if (buttons & 0x10)
-                    g->mg_meter += 1.0f;
+                if (buttons & 0x10) g->mg_meter += 1.0f;
                 if ((buttons & 0x20) || g->mg_timer >= MG_COUNT_MAX) {
                     int presses = (int)g->mg_meter;
                     int diff = presses - g->mg_target;
@@ -488,55 +576,83 @@ void game_update(GameContext *g, uint32_t buttons) {
                 }
             }
             break;
+        case MG_AVOID:
+            /* red until mg_go_at, green until mg_target, then done */
+            if (g->mg_timer < g->mg_go_at) g->mg_phase = 0; /* red */
+            else if (g->mg_timer < g->mg_target) g->mg_phase = 1; /* green */
+            else {
+                if (!g->mg_pressed) g->mg_human_score = 8;
+                mg_finish_play(g);
+                break;
+            }
+            if (buttons & 0x10 && !g->mg_pressed) {
+                g->mg_pressed = 1;
+                if (g->mg_phase == 0) {
+                    g->mg_human_score = 5; sfx_play(SFX_FAIL);
+                } else {
+                    int early = g->mg_timer - g->mg_go_at;
+                    g->mg_human_score = 100 - early;
+                    if (g->mg_human_score < 20) g->mg_human_score = 20;
+                    sfx_play(SFX_COIN);
+                }
+                mg_finish_play(g);
+            }
+            break;
+        case MG_ZONE:
+            /* marker drifts; player taps Cross to nudge left/right alternating */
+            g->mg_zone_c += 0.011f * ((g->mg_timer & 64) ? 1.0f : -1.0f);
+            if (g->mg_zone_c < 0.18f) g->mg_zone_c = 0.18f;
+            if (g->mg_zone_c > 0.82f) g->mg_zone_c = 0.82f;
+            g->mg_marker += g->mg_marker_dir * 0.018f;
+            if (g->mg_marker >= 1) { g->mg_marker = 1; g->mg_marker_dir = -1; }
+            if (g->mg_marker <= 0) { g->mg_marker = 0; g->mg_marker_dir = 1; }
+            if (buttons & 0x10) {
+                /* nudge marker toward center of zone */
+                if (g->mg_marker < g->mg_zone_c) g->mg_marker += 0.06f;
+                else g->mg_marker -= 0.06f;
+            }
+            if (fabsf(g->mg_marker - g->mg_zone_c) <= g->mg_zone_w)
+                g->mg_zone_hits++;
+            if (g->mg_timer >= MG_ZONE_MAX) {
+                g->mg_human_score = (g->mg_zone_hits * 100) / MG_ZONE_MAX;
+                if (g->mg_human_score > 100) g->mg_human_score = 100;
+                mg_finish_play(g);
+            }
+            break;
         case MG_REACTION:
         default:
             if (buttons & 0x10) {
                 if (g->mg_timer < g->mg_go_at) {
-                    g->mg_human_score = 5;
-                    g->mg_pressed = 1;
-                    sfx_play(SFX_FAIL);
-                    mg_finish_play(g);
+                    g->mg_human_score = 5; g->mg_pressed = 1; sfx_play(SFX_FAIL); mg_finish_play(g);
                 } else if (!g->mg_pressed) {
                     int delay = g->mg_timer - g->mg_go_at;
                     g->mg_human_score = 100 - delay * 2;
                     if (g->mg_human_score < 10) g->mg_human_score = 10;
-                    g->mg_pressed = 1;
-                    spawn_fx(g, 424, 240, 0xFF2ECC71, 10);
-                    sfx_play(SFX_COIN);
+                    g->mg_pressed = 1; spawn_fx(g, 424, 240, 0xFF2ECC71, 10); sfx_play(SFX_COIN);
                     mg_finish_play(g);
                 }
             } else if (g->mg_timer >= MG_REACT_MAX) {
-                g->mg_human_score = 8;
-                mg_finish_play(g);
+                g->mg_human_score = 8; mg_finish_play(g);
             }
             break;
         } break;
     case STATE_MG_RESULT:
         if (g->state_timer == 1) mg_rank_and_pay(g);
-        if (g->state_timer >= MG_RESULT_HOLD || (buttons & 0x10)) next_player(g);
+        if (g->state_timer >= MG_RESULT_HOLD || (buttons & 0x10)) {
+            g->state = STATE_TURN_START; g->state_timer = 0;
+        }
         break;
-    case STATE_ROUND_END:
-        if (g->state_timer >= ROUND_HOLD) g->state = STATE_TURN_START; break;
     case STATE_RESULTS:
         if (buttons & 0x10) {
             int i;
             sfx_play(SFX_CLICK);
-            g->state = STATE_TITLE;
-            g->state_timer = 0;
-            g->round = 0;
-            g->current_player = 0;
+            g->state = STATE_TITLE; g->state_timer = 0; g->round = 0; g->current_player = 0;
             for (i = 0; i < MAX_PLAYERS; ++i) {
-                g->players[i].celebrating = false;
-                g->players[i].coins = 12;
-                g->players[i].stars = 0;
-                g->players[i].item_count = 0;
-                g->players[i].shielded = false;
+                g->players[i].celebrating = false; g->players[i].coins = 12;
+                g->players[i].stars = 0; g->players[i].item_count = 0; g->players[i].shielded = false;
             }
         }
-        if (buttons & 0x100) {
-            sfx_play(SFX_CLICK);
-            g->state = STATE_EXIT;
-        }
+        if (buttons & 0x100) { sfx_play(SFX_CLICK); g->state = STATE_EXIT; }
         break;
     default: break;
     }

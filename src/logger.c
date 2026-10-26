@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <sys/file.h>
+#include <sys/stat.h>
 
 static FILE *g_log_hdd = NULL;
 static FILE *g_log_usb = NULL;
@@ -45,7 +45,7 @@ static int try_open_usb(void)
         dir[sizeof(dir)-1] = '\0';
         char *slash = strrchr(dir, '/');
         if (slash) *slash = '\0';
-        sysFsMkdir(dir, 0777); /* ignore error */
+        mkdir(dir, 0777); /* ignore error */
 
         FILE *f = fopen(candidates[i], "a");
         if (f) {
@@ -63,7 +63,7 @@ void logger_init(void)
     if (g_initialized) return;
 
     /* HDD path – always try */
-    sysFsMkdir("/dev_hdd0/tmp", 0777);
+    mkdir("/dev_hdd0/tmp", 0777);
     g_log_hdd = fopen("/dev_hdd0/tmp/boardgame.log", "a");
 
     /* USB path – first available */
@@ -104,7 +104,6 @@ void logger_log(LogLevel level, const char *func, int line, const char *fmt, ...
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    /* Use gettimeofday (PSL1GHT/newlib supports this) */
     struct timeval tv;
     double sec;
     if (gettimeofday(&tv, NULL) == 0)
@@ -112,7 +111,7 @@ void logger_log(LogLevel level, const char *func, int line, const char *fmt, ...
     else
         sec = (double)(++g_frame_counter) * 0.016;
 
-    snprintf(buf, sizeof(buf), "[%.3f][%s] %s:%d | %s\n",
+    snprintf(buf, sizeof(buf), "[%.3f][%s] %.32s:%d | %.400s\n",
              sec, level_str(level), func ? func : "?", line, msg);
 
     if (g_log_hdd) {

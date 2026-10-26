@@ -28,7 +28,7 @@ OFILES		:= $(addprefix $(BUILD)/,$(CFILES:.c=.o) $(CPPFILES:.cpp=.o))
 
 .PHONY: all clean install
 
-all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).self
+all: $(BUILD)/$(TARGET).elf
 
 $(BUILD):
 	@mkdir -p $@
@@ -42,11 +42,8 @@ $(BUILD)/%.o: $(SOURCES)/%.cpp | $(BUILD)
 $(BUILD)/$(TARGET).elf: $(OFILES)
 	$(CC) $(OFILES) $(LDFLAGS) -o $@
 
-$(BUILD)/$(TARGET).self: $(BUILD)/$(TARGET).elf
-	$(SPRXLINKER) $< $@
-
 clean:
 	rm -rf $(BUILD)
 
 install: all
-	cp $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).self .
+	cp $(BUILD)/$(TARGET).elf .

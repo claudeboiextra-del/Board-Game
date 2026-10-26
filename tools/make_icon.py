@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a simple 320x176 ICON0.PNG for Sky Circuit if none exists."""
+"""Generate a simple 320x176 ICON0.PNG for Board Game if none exists."""
 import sys
 import struct
 import zlib

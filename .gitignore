@@ -1,0 +1,18 @@
+# Build artefacts
+build/
+*.elf
+*.self
+*.pkg
+ICON0.PNG
+
+# Toolchain (local)
+ps3dev/
+ps3toolchain-src/
+tiny3d-src/
+psl1ght-src/
+logs/
+
+# Editor
+*.o
+*~
+.DS_Store

@@ -10,7 +10,7 @@
 #define BOARD_COUNT     2
 #define MAX_ITEMS       2
 #define MAX_FX          32
-#define MG_COUNT        5
+#define MG_TYPE_COUNT   5
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -77,7 +77,7 @@ typedef struct {
     bool celebrating;
     float disp_x, disp_y;
     float hop_t;
-    float shadow_s;       /* contact shadow scale 0..1 */
+    float shadow_s;
     ItemType items[MAX_ITEMS];
     int  item_count;
     bool shielded;
@@ -159,12 +159,11 @@ typedef struct {
     int          mg_pressed;
     int          mg_human_score;
     bool         mg_awarded;
-    /* HOLD / COUNT extras */
-    int          mg_hold_frames;   /* how long held */
-    int          mg_target;        /* ideal hold frames or flash count */
-    int          mg_flash_count;   /* flashes shown so far */
-    int          mg_next_flash;    /* frame of next flash */
-    int          mg_phase;         /* 0=show 1=answer */
+    int          mg_hold_frames;
+    int          mg_target;
+    int          mg_flash_count;
+    int          mg_next_flash;
+    int          mg_phase;
 } GameContext;
 
 void game_init(GameContext *g);

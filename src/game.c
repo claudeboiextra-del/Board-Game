@@ -1,7 +1,7 @@
 /*
- * Board Game – core game state machine
- * Lightweight, expressive turn flow with dice, movement, shops, stars,
- * CPU AI (3 difficulty tiers) and RNG contest substitute.
+ * Board Game – core loop
+ * Hop-by-hop movement, branch choice, land juice, shop, contests.
+ * Kept light for PS3 HEN.
  */
 
 #include "game.h"
@@ -12,15 +12,42 @@
 #include <time.h>
 
 static Board g_boards[BOARD_COUNT];
-static int   g_round_opts[MAX_ROUNDS_OPTS] = {10, 15, 20, 30};
+
+/* frames between token hops – higher = slower / more readable */
+#define HOP_FRAMES      10
+#define LAND_HOLD       35
+#define DICE_CPU_DELAY  40
+#define ROUND_HOLD      50
+#define CONTEST_HOLD    55
 
 static int rand_range(int lo, int hi)
 {
+    if (hi <= lo) return lo;
     return lo + (rand() % (hi - lo + 1));
+}
+
+static void spawn_popup(GameContext *g, float x, float y, int value, int kind)
+{
+    g->popup.active = 1;
+    g->popup.x = x;
+    g->popup.y = y;
+    g->popup.value = value;
+    g->popup.kind = kind;
+    g->popup.life = 1.2f;
+}
+
+static void node_world(GameContext *g, int node, float *x, float *y)
+{
+    /* same mapping as renderer playfield */
+    float ox = 40.0f, oy = 70.0f, sx = 640.0f, sy = 360.0f;
+    BoardNode *n = &g->board->nodes[node];
+    *x = ox + n->x * sx;
+    *y = oy + n->y * sy;
 }
 
 void game_init(GameContext *g)
 {
+    int i;
     LOG_I("game_init");
     memset(g, 0, sizeof(*g));
     srand((unsigned)time(NULL));
@@ -36,9 +63,8 @@ void game_init(GameContext *g)
     g->current_player = 0;
     g->round = 1;
 
-    /* default: 1 human + 3 CPUs (Normal) */
-    int i;
     for (i = 0; i < MAX_PLAYERS; ++i) {
+        float x, y;
         g->players[i].id = i;
         g->players[i].is_human = (i == 0);
         g->players[i].diff = DIFF_NORMAL;
@@ -47,9 +73,13 @@ void game_init(GameContext *g)
         g->players[i].node = g->board->start_node;
         g->players[i].color = i;
         g->players[i].celebrating = false;
+        node_world(g, g->players[i].node, &x, &y);
+        g->players[i].disp_x = x;
+        g->players[i].disp_y = y;
+        g->players[i].hop_t = 1.0f;
     }
 
-    LOG_I("Game ready – default 1H+3CPU, Visual board, 15 rounds");
+    LOG_I("Game ready – 1H+3CPU, Visual board, 15 rounds");
 }
 
 static void relocate_star(GameContext *g)
@@ -62,7 +92,6 @@ static void relocate_star(GameContext *g)
     } while ((g->board->nodes[new_node].type == SPACE_SHOP ||
               new_node == g->board->star_node) && tries < 40);
 
-    /* clear old */
     if (g->board->nodes[g->board->star_node].type == SPACE_STAR)
         g->board->nodes[g->board->star_node].type = SPACE_NORMAL;
 
@@ -74,12 +103,11 @@ static void relocate_star(GameContext *g)
 static int cpu_choose_path(GameContext *g, Player *p, int from)
 {
     BoardNode *n = &g->board->nodes[from];
+    int best, score_best, i;
     if (n->next_count <= 1) return n->next[0];
 
-    /* simple heuristic weighted by difficulty */
-    int best = n->next[0];
-    int score_best = -999;
-    int i;
+    best = n->next[0];
+    score_best = -999;
     for (i = 0; i < n->next_count; ++i) {
         int cand = n->next[i];
         int score = 0;
@@ -90,7 +118,6 @@ static int cpu_choose_path(GameContext *g, Player *p, int from)
         if (t == SPACE_MINUS_COIN) score -= 15;
         if (t == SPACE_HIDDEN_COIN || t == SPACE_HIDDEN_STAR) score += 8;
 
-        /* Hard AI looks further; Easy is noisier */
         if (p->diff == DIFF_HARD) score += rand_range(0, 5);
         else if (p->diff == DIFF_EASY) score += rand_range(-20, 20);
         else score += rand_range(-5, 8);
@@ -103,49 +130,75 @@ static int cpu_choose_path(GameContext *g, Player *p, int from)
     return best;
 }
 
+static void start_hop(GameContext *g, Player *p, int next_node)
+{
+    p->node = next_node;
+    p->hop_t = 0.0f;
+    g->hop_cooldown = HOP_FRAMES;
+    g->move_remaining--;
+}
+
 static void apply_land(GameContext *g, Player *p)
 {
     BoardNode *n = &g->board->nodes[p->node];
+    float px, py;
+    int delta;
+
+    node_world(g, p->node, &px, &py);
+    g->last_land_type = (int)n->type;
+    g->land_flash = LAND_HOLD;
+
     LOG_I("Player %d lands on node %d type %d", p->id, p->node, n->type);
 
     switch (n->type) {
         case SPACE_PLUS_COIN:
-            p->coins += 3 + rand_range(0, 2);
-            LOG_I("  +coins -> %d", p->coins);
+            delta = 3 + rand_range(0, 2);
+            p->coins += delta;
+            spawn_popup(g, px, py - 30, delta, 0);
             break;
         case SPACE_MINUS_COIN:
-            p->coins -= 3;
+            delta = 3;
+            p->coins -= delta;
             if (p->coins < 0) p->coins = 0;
-            LOG_I("  -coins -> %d", p->coins);
+            spawn_popup(g, px, py - 30, -delta, 2);
             break;
         case SPACE_EVENT:
-            /* tiny random event */
-            if (rand_range(0, 1)) { p->coins += 5; LOG_I("  event +5"); }
-            else { p->coins = (p->coins > 2) ? p->coins - 2 : 0; LOG_I("  event -2"); }
+            if (rand_range(0, 1)) {
+                p->coins += 5;
+                spawn_popup(g, px, py - 30, 5, 4);
+            } else {
+                delta = (p->coins > 2) ? 2 : p->coins;
+                p->coins -= delta;
+                spawn_popup(g, px, py - 30, -delta, 4);
+            }
             break;
         case SPACE_SHOP:
+            spawn_popup(g, px, py - 30, 0, 3);
             g->state = STATE_SHOP;
-            return; /* stay in shop state */
+            g->state_timer = 0;
+            return;
         case SPACE_STAR:
             if (p->coins >= 20) {
                 p->coins -= 20;
                 p->stars += 1;
-                LOG_I("  bought star! stars=%d coins=%d", p->stars, p->coins);
+                spawn_popup(g, px, py - 30, 1, 1);
                 relocate_star(g);
+            } else {
+                spawn_popup(g, px, py - 30, 0, 2); /* can't afford */
             }
             break;
         case SPACE_HIDDEN_COIN:
             if (!n->hidden_revealed) {
                 n->hidden_revealed = true;
                 p->coins += 10;
-                LOG_I("  hidden coin block! +10");
+                spawn_popup(g, px, py - 30, 10, 0);
             }
             break;
         case SPACE_HIDDEN_STAR:
             if (!n->hidden_revealed) {
                 n->hidden_revealed = true;
                 p->stars += 1;
-                LOG_I("  hidden star discovered!");
+                spawn_popup(g, px, py - 30, 1, 1);
             }
             break;
         default:
@@ -153,98 +206,169 @@ static void apply_land(GameContext *g, Player *p)
     }
 }
 
-static void do_shop(GameContext *g, Player *p)
+static void do_shop(GameContext *g, Player *p, uint32_t buttons)
 {
-    /* simple auto-buy logic for CPU; human presses confirm */
     if (!p->is_human) {
+        /* CPU decides once after a short think */
+        if (g->state_timer < 25) return;
         if (p->coins >= 20 && p->diff != DIFF_EASY) {
             p->coins -= 20;
             p->stars += 1;
-            LOG_I("CPU %d bought star in shop", p->id);
             relocate_star(g);
+            LOG_I("CPU %d bought star in shop", p->id);
         } else if (p->coins >= 5) {
-            p->coins -= 5; /* buy a small boost item (flavour) */
+            p->coins -= 5;
             LOG_I("CPU %d bought item", p->id);
         }
-        g->state = STATE_TURN_START; /* next player handled outside */
+        g->state = STATE_TURN_START;
         return;
     }
-    /* human: for now auto-skip after one frame – full menu later */
-    g->state = STATE_TURN_START;
+
+    /* Human: CROSS = buy star if possible, CIRCLE = leave */
+    if (buttons & 0x10) {
+        if (p->coins >= 20) {
+            p->coins -= 20;
+            p->stars += 1;
+            relocate_star(g);
+            LOG_I("Human bought star");
+        }
+        g->state = STATE_TURN_START;
+    } else if (buttons & 0x20) {
+        g->state = STATE_TURN_START;
+    }
 }
 
 static void next_player(GameContext *g)
 {
     g->current_player = (g->current_player + 1) % g->player_count;
     if (g->current_player == 0) {
-        /* full round completed */
         g->round++;
         g->star_relocated_this_round = false;
         relocate_star(g);
         g->state = STATE_ROUND_END;
-        LOG_I("Round %d finished, starting next", g->round - 1);
+        g->state_timer = 0;
+        LOG_I("Round complete -> %d", g->round);
         if (g->round > g->max_rounds) {
             g->state = STATE_RESULTS;
-            LOG_I("Match over – going to results");
+            LOG_I("Match over");
         }
     } else {
         g->state = STATE_TURN_START;
+        g->state_timer = 0;
+    }
+}
+
+static void update_display_positions(GameContext *g)
+{
+    int i;
+    for (i = 0; i < g->player_count; ++i) {
+        Player *pl = &g->players[i];
+        float tx, ty;
+        node_world(g, pl->node, &tx, &ty);
+        /* slight stack offset so tokens don't fully overlap */
+        tx += (float)(i % 4) * 10.0f - 15.0f;
+
+        if (pl->hop_t < 1.0f) {
+            pl->hop_t += 0.12f;
+            if (pl->hop_t > 1.0f) pl->hop_t = 1.0f;
+            /* ease-out hop */
+            {
+                float t = pl->hop_t;
+                float e = 1.0f - (1.0f - t) * (1.0f - t);
+                pl->disp_x += (tx - pl->disp_x) * e * 0.35f + (tx - pl->disp_x) * 0.15f;
+                pl->disp_y += (ty - pl->disp_y) * e * 0.35f + (ty - pl->disp_y) * 0.15f;
+                /* arc */
+                pl->disp_y -= sinf(t * 3.14159f) * 12.0f;
+            }
+        } else {
+            pl->disp_x += (tx - pl->disp_x) * 0.25f;
+            pl->disp_y += (ty - pl->disp_y) * 0.25f;
+        }
+    }
+
+    if (g->popup.active) {
+        g->popup.life -= 0.016f;
+        g->popup.y -= 0.6f;
+        if (g->popup.life <= 0.0f) g->popup.active = 0;
     }
 }
 
 void game_update(GameContext *g, uint32_t buttons)
 {
+    Player *p = &g->players[g->current_player];
+    BoardNode *n;
+
     g->frame++;
     g->anim_t += 0.016f;
-    Player *p = &g->players[g->current_player];
+    g->state_timer++;
+    if (g->hop_cooldown > 0) g->hop_cooldown--;
+    if (g->land_flash > 0) g->land_flash--;
+
+    update_display_positions(g);
 
     switch (g->state) {
     case STATE_TITLE:
-        if (buttons & 0x10) { /* CROSS-ish */
+        if (buttons & 0x10) {
             g->state = STATE_SETUP;
+            g->state_timer = 0;
             LOG_I("Title -> Setup");
         }
         break;
 
     case STATE_SETUP:
-        /* very light: cycle player count with buttons, confirm with cross */
-        if (buttons & 0x20) g->player_count = (g->player_count % 4) + 1;
+        if (buttons & 0x20)
+            g->player_count = (g->player_count % 4) + 1;
         if (buttons & 0x10) {
-            /* set human/cpu: first is always human for simplicity */
             int i;
             for (i = 0; i < g->player_count; ++i) {
+                float x, y;
                 g->players[i].is_human = (i == 0);
                 g->players[i].diff = DIFF_NORMAL;
                 g->players[i].coins = 10;
                 g->players[i].stars = 0;
                 g->players[i].node = g->board->start_node;
+                node_world(g, g->players[i].node, &x, &y);
+                g->players[i].disp_x = x;
+                g->players[i].disp_y = y;
+                g->players[i].hop_t = 1.0f;
             }
             g->state = STATE_BOARD_SELECT;
-            LOG_I("Setup done – %d players", g->player_count);
+            g->state_timer = 0;
+            LOG_I("Setup – %d players", g->player_count);
         }
         break;
 
     case STATE_BOARD_SELECT:
         if (buttons & 0x20) {
+            int i;
             g->board_idx = (g->board_idx + 1) % BOARD_COUNT;
             g->board = &g_boards[g->board_idx];
-            LOG_I("Selected board %s", g->board->name);
+            for (i = 0; i < g->player_count; ++i) {
+                float x, y;
+                g->players[i].node = g->board->start_node;
+                node_world(g, g->players[i].node, &x, &y);
+                g->players[i].disp_x = x;
+                g->players[i].disp_y = y;
+            }
+            LOG_I("Board %s", g->board->name);
         }
         if (buttons & 0x10) {
-            g->state = STATE_MATCH;
             g->round = 1;
             g->current_player = 0;
             g->state = STATE_TURN_START;
+            g->state_timer = 0;
             LOG_I("Match start on %s", g->board->name);
         }
         break;
 
     case STATE_TURN_START:
-        LOG_D("Turn start P%d", p->id);
         p->celebrating = false;
         g->dice_value = 0;
         g->move_remaining = 0;
+        g->branch_choice = 0;
         g->state = STATE_DICE_ROLL;
+        g->state_timer = 0;
+        LOG_D("Turn P%d", p->id);
         break;
 
     case STATE_DICE_ROLL:
@@ -253,49 +377,77 @@ void game_update(GameContext *g, uint32_t buttons)
                 g->dice_value = rand_range(1, 6);
                 p->celebrating = (g->dice_value >= 5);
                 g->move_remaining = g->dice_value;
+                g->state = STATE_MOVE;
+                g->state_timer = 0;
+                g->hop_cooldown = 4;
                 LOG_I("Human rolled %d", g->dice_value);
-                g->state = STATE_MOVE;
             }
-        } else {
-            /* CPU always rolls after a short delay (frame based) */
-            if ((g->frame % 30) == 0) {
-                int bias = (p->diff == DIFF_HARD) ? 1 : (p->diff == DIFF_EASY ? -1 : 0);
-                g->dice_value = rand_range(1, 6) + bias;
-                if (g->dice_value < 1) g->dice_value = 1;
-                if (g->dice_value > 6) g->dice_value = 6;
-                p->celebrating = (g->dice_value >= 5);
-                g->move_remaining = g->dice_value;
-                LOG_I("CPU %d rolled %d (diff %d)", p->id, g->dice_value, p->diff);
-                g->state = STATE_MOVE;
-            }
+        } else if (g->state_timer >= DICE_CPU_DELAY) {
+            int bias = (p->diff == DIFF_HARD) ? 1 : (p->diff == DIFF_EASY ? -1 : 0);
+            g->dice_value = rand_range(1, 6) + bias;
+            if (g->dice_value < 1) g->dice_value = 1;
+            if (g->dice_value > 6) g->dice_value = 6;
+            p->celebrating = (g->dice_value >= 5);
+            g->move_remaining = g->dice_value;
+            g->state = STATE_MOVE;
+            g->state_timer = 0;
+            g->hop_cooldown = 4;
+            LOG_I("CPU %d rolled %d", p->id, g->dice_value);
         }
         break;
 
     case STATE_MOVE:
-        if (g->move_remaining > 0) {
-            int next;
-            if (g->board->nodes[p->node].next_count == 0) {
-                next = p->node; /* stuck */
-            } else if (g->board->nodes[p->node].next_count == 1) {
-                next = g->board->nodes[p->node].next[0];
-            } else {
-                next = p->is_human ? g->board->nodes[p->node].next[0] /* first path for human simplicity */
-                                   : cpu_choose_path(g, p, p->node);
-            }
-            p->node = next;
-            g->move_remaining--;
-            LOG_D("P%d step -> node %d (left %d)", p->id, p->node, g->move_remaining);
-        } else {
+        if (g->move_remaining <= 0) {
             g->state = STATE_LAND;
+            g->state_timer = 0;
+            break;
+        }
+        if (g->hop_cooldown > 0) break;
+
+        n = &g->board->nodes[p->node];
+        if (n->next_count == 0) {
+            g->move_remaining = 0;
+            g->state = STATE_LAND;
+            g->state_timer = 0;
+        } else if (n->next_count == 1) {
+            start_hop(g, p, n->next[0]);
+        } else {
+            /* fork */
+            if (p->is_human) {
+                g->branch_choice = 0;
+                g->state = STATE_BRANCH;
+                g->state_timer = 0;
+            } else {
+                start_hop(g, p, cpu_choose_path(g, p, p->node));
+            }
+        }
+        break;
+
+    case STATE_BRANCH:
+        /* LEFT/RIGHT via CIRCLE cycle, CROSS confirm */
+        if (buttons & 0x20) {
+            n = &g->board->nodes[p->node];
+            if (n->next_count > 0)
+                g->branch_choice = (g->branch_choice + 1) % n->next_count;
+        }
+        if (buttons & 0x10) {
+            n = &g->board->nodes[p->node];
+            if (g->branch_choice < 0) g->branch_choice = 0;
+            if (g->branch_choice >= n->next_count) g->branch_choice = 0;
+            start_hop(g, p, n->next[g->branch_choice]);
+            g->state = STATE_MOVE;
+            g->state_timer = 0;
         }
         break;
 
     case STATE_LAND:
-        apply_land(g, p);
-        if (g->state == STATE_LAND) { /* not redirected to shop */
-            /* after land, chance of simulated contest every few turns */
-            if ((g->round % 3) == 0 && g->current_player == 0) {
+        if (g->state_timer == 1)
+            apply_land(g, p);
+        if (g->state == STATE_SHOP) break;
+        if (g->state_timer >= LAND_HOLD) {
+            if ((g->round % 3) == 0 && g->current_player == g->player_count - 1) {
                 g->state = STATE_MINIGAME_SIM;
+                g->state_timer = 0;
             } else {
                 next_player(g);
             }
@@ -303,41 +455,41 @@ void game_update(GameContext *g, uint32_t buttons)
         break;
 
     case STATE_SHOP:
-        do_shop(g, p);
-        if (g->state != STATE_SHOP) next_player(g);
+        do_shop(g, p, buttons);
+        if (g->state != STATE_SHOP)
+            next_player(g);
         break;
 
     case STATE_MINIGAME_SIM:
-        /* RNG substitute – distribute coins based on difficulty weight */
-        {
+        if (g->state_timer == 1) {
             int i;
-            LOG_I("Simulated contest (RNG)");
+            LOG_I("Contest!");
             for (i = 0; i < g->player_count; ++i) {
                 int roll = rand_range(0, 100);
-                int bonus = 0;
+                int bonus;
                 if (g->players[i].diff == DIFF_HARD) roll += 15;
                 if (g->players[i].diff == DIFF_EASY) roll -= 10;
+                if (g->players[i].is_human) roll += 5;
                 if (roll > 70) bonus = 10;
                 else if (roll > 40) bonus = 5;
-                else bonus = 1;
+                else bonus = 2;
                 g->players[i].coins += bonus;
-                LOG_I("  P%d contest reward +%d (total %d)", i, bonus, g->players[i].coins);
+                g->contest_rewards[i] = bonus;
             }
-            next_player(g);
         }
+        if (g->state_timer >= CONTEST_HOLD)
+            next_player(g);
         break;
 
     case STATE_ROUND_END:
-        /* brief pause then continue */
-        if ((g->frame % 45) == 0) g->state = STATE_TURN_START;
+        if (g->state_timer >= ROUND_HOLD)
+            g->state = STATE_TURN_START;
         break;
 
     case STATE_RESULTS:
-        /* stay until exit */
         if (buttons & 0x10) g->state = STATE_EXIT;
         break;
 
-    case STATE_EXIT:
     default:
         break;
     }

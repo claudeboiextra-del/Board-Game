@@ -10,12 +10,15 @@
 #include "logger.h"
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <cell/cell_fs.h>
 
 static FILE *g_log_hdd = NULL;
 static FILE *g_log_usb = NULL;
 static LogLevel g_level = LOG_LEVEL_DEBUG;
 static int g_initialized = 0;
 static char g_usb_path[LOG_MAX_PATH] = {0};
+static uint32_t g_frame_counter = 0;
 
 static const char *level_str(LogLevel lvl)
 {
@@ -42,6 +45,7 @@ static int try_open_usb(void)
         /* ensure directory exists (best-effort) */
         char dir[64];
         strncpy(dir, candidates[i], sizeof(dir) - 1);
+        dir[sizeof(dir)-1] = '\0';
         char *slash = strrchr(dir, '/');
         if (slash) *slash = '\0';
         cellFsMkdir(dir, 0777); /* ignore error */
@@ -50,6 +54,7 @@ static int try_open_usb(void)
         if (f) {
             g_log_usb = f;
             strncpy(g_usb_path, candidates[i], sizeof(g_usb_path) - 1);
+            g_usb_path[sizeof(g_usb_path)-1] = '\0';
             return 1;
         }
     }
@@ -102,10 +107,13 @@ void logger_log(LogLevel level, const char *func, int line, const char *fmt, ...
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    /* simple timestamp using sys time (seconds since boot is fine for diagnostics) */
-    uint64_t tick;
-    sys_time_get_system_time(&tick, NULL);
-    double sec = (double)tick / 1000000.0;
+    /* Prefer system time; fall back to simple frame counter if unavailable */
+    double sec = 0.0;
+    uint64_t tick = 0;
+    if (sys_time_get_system_time(&tick, NULL) == 0)
+        sec = (double)tick / 1000000.0;
+    else
+        sec = (double)(++g_frame_counter) * 0.016;
 
     snprintf(buf, sizeof(buf), "[%.3f][%s] %s:%d | %s\n",
              sec, level_str(level), func ? func : "?", line, msg);

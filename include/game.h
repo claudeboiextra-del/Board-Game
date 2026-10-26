@@ -9,8 +9,8 @@
 #define MAX_ROUNDS_OPTS 4
 #define BOARD_COUNT     2
 #define MAX_ITEMS       2
-#define MAX_FX          24
-#define MG_COUNT        3
+#define MAX_FX          32
+#define MG_COUNT        5
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -37,9 +37,9 @@ typedef enum {
     STATE_LAND,
     STATE_SHOP,
     STATE_ROUND_END,
-    STATE_MG_INTRO,       /* transition card */
-    STATE_MG_PLAY,        /* active minigame */
-    STATE_MG_RESULT,      /* rankings + coin payout */
+    STATE_MG_INTRO,
+    STATE_MG_PLAY,
+    STATE_MG_RESULT,
     STATE_RESULTS,
     STATE_EXIT
 } GameState;
@@ -59,9 +59,11 @@ typedef enum {
 } ItemType;
 
 typedef enum {
-    MG_MASH = 0,          /* mash Cross to fill meter */
-    MG_TIMING,            /* stop marker in green zone */
-    MG_REACTION           /* wait for GO, press Cross */
+    MG_MASH = 0,      /* mash Cross – fill meter */
+    MG_TIMING,        /* stop marker in green */
+    MG_REACTION,      /* wait for GO then Cross */
+    MG_HOLD,          /* hold Cross, release in window */
+    MG_COUNT          /* count flashes, Cross when done */
 } MiniGameType;
 
 typedef struct {
@@ -75,13 +77,13 @@ typedef struct {
     bool celebrating;
     float disp_x, disp_y;
     float hop_t;
+    float shadow_s;       /* contact shadow scale 0..1 */
     ItemType items[MAX_ITEMS];
     int  item_count;
     bool shielded;
     int  team;
-    /* minigame score this round (higher = better) */
     int  mg_score;
-    int  mg_rank;         /* 0 = best */
+    int  mg_rank;
 } Player;
 
 typedef struct {
@@ -148,16 +150,21 @@ typedef struct {
 
     FxSpark    fx[MAX_FX];
 
-    /* minigame runtime */
     MiniGameType mg_type;
-    int          mg_timer;        /* frames remaining / elapsed */
-    float        mg_meter;        /* 0..1 mash fill or marker pos */
-    float        mg_marker;       /* timing marker 0..1 */
-    float        mg_marker_dir;   /* +1 / -1 */
-    int          mg_go_at;        /* reaction: frame when GO appears */
-    int          mg_pressed;      /* human already pressed */
+    int          mg_timer;
+    float        mg_meter;
+    float        mg_marker;
+    float        mg_marker_dir;
+    int          mg_go_at;
+    int          mg_pressed;
     int          mg_human_score;
     bool         mg_awarded;
+    /* HOLD / COUNT extras */
+    int          mg_hold_frames;   /* how long held */
+    int          mg_target;        /* ideal hold frames or flash count */
+    int          mg_flash_count;   /* flashes shown so far */
+    int          mg_next_flash;    /* frame of next flash */
+    int          mg_phase;         /* 0=show 1=answer */
 } GameContext;
 
 void game_init(GameContext *g);

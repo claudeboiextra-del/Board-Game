@@ -10,7 +10,7 @@
 #define BOARD_COUNT     2
 #define MAX_ITEMS       2
 #define MAX_FX          32
-#define MG_TYPE_COUNT   5
+#define MG_TYPE_COUNT   7
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -20,7 +20,9 @@ typedef enum {
     SPACE_SHOP,
     SPACE_STAR,
     SPACE_HIDDEN_COIN,
-    SPACE_HIDDEN_STAR
+    SPACE_HIDDEN_STAR,
+    SPACE_WARP,       /* teleport to random node */
+    SPACE_HAZARD      /* risk: lose coins or get a small prize */
 } SpaceType;
 
 typedef enum {
@@ -55,7 +57,8 @@ typedef enum {
     ITEM_DOUBLE_DICE,
     ITEM_BOOST,
     ITEM_STEAL,
-    ITEM_SHIELD
+    ITEM_SHIELD,
+    ITEM_SWAP         /* swap board position with a rival */
 } ItemType;
 
 typedef enum {
@@ -63,7 +66,9 @@ typedef enum {
     MG_TIMING,        /* stop marker in green */
     MG_REACTION,      /* wait for GO then Cross */
     MG_HOLD,          /* hold Cross, release in window */
-    MG_COUNT          /* count flashes, Cross when done */
+    MG_COUNT,         /* count flashes, Circle to submit */
+    MG_AVOID,         /* DON'T press while red; press on green */
+    MG_ZONE           /* keep marker inside sliding safe zone */
 } MiniGameType;
 
 typedef struct {
@@ -164,6 +169,9 @@ typedef struct {
     int          mg_flash_count;
     int          mg_next_flash;
     int          mg_phase;
+    float        mg_zone_c;      /* zone center 0..1 for MG_ZONE */
+    float        mg_zone_w;      /* zone half-width */
+    int          mg_zone_hits;   /* frames inside zone */
 } GameContext;
 
 void game_init(GameContext *g);

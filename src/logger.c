@@ -1,8 +1,8 @@
 /*
  * Dual-path logger for PS3 homebrew.
  * Writes simultaneously to:
- *   /dev_hdd0/tmp/skycircuit.log
- *   /dev_usb000/skycircuit.log  (or /dev_usb001 if 000 unavailable)
+ *   /dev_hdd0/tmp/boardgame.log
+ *   /dev_usb000/boardgame.log  (or /dev_usb001 if 000 unavailable)
  * Captures function entry/exit, state changes, errors, frame timing hints,
  * and any recoverable faults so black-screens / hangs can be diagnosed offline.
  */
@@ -35,9 +35,9 @@ static const char *level_str(LogLevel lvl)
 static int try_open_usb(void)
 {
     const char *candidates[] = {
-        "/dev_usb000/skycircuit.log",
-        "/dev_usb001/skycircuit.log",
-        "/dev_usb002/skycircuit.log",
+        "/dev_usb000/boardgame.log",
+        "/dev_usb001/boardgame.log",
+        "/dev_usb002/boardgame.log",
         NULL
     };
     int i;
@@ -67,15 +67,15 @@ void logger_init(void)
 
     /* HDD path – always try */
     cellFsMkdir("/dev_hdd0/tmp", 0777);
-    g_log_hdd = fopen("/dev_hdd0/tmp/skycircuit.log", "a");
+    g_log_hdd = fopen("/dev_hdd0/tmp/boardgame.log", "a");
 
     /* USB path – first available */
     try_open_usb();
 
     g_initialized = 1;
 
-    LOG_I("=== Sky Circuit logger started ===");
-    if (g_log_hdd) LOG_I("HDD log: /dev_hdd0/tmp/skycircuit.log");
+    LOG_I("=== Board Game logger started ===");
+    if (g_log_hdd) LOG_I("HDD log: /dev_hdd0/tmp/boardgame.log");
     else           LOG_W("HDD log unavailable");
     if (g_log_usb) LOG_I("USB log: %s", g_usb_path);
     else           LOG_W("USB log unavailable (no stick or write-protected)");

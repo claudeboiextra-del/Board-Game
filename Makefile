@@ -7,10 +7,18 @@ SOURCES		:= src
 INCLUDES	:= include
 DATA		:= assets
 
-# PS3 toolchain
+# Defaults if not set by the environment / ppu_rules
+PS3DEV		?= /usr/local/ps3dev
+PSL1GHT		?= $(PS3DEV)
+PORTLIBS	?= $(PS3DEV)/portlibs/ppu
+
+# PS3 toolchain rules (defines CC, MACHDEP, SPRXLINKER, etc.)
 include $(PSL1GHT)/ppu_rules
 
-CFLAGS		:= -O2 -Wall -mcpu=cell $(MACHDEP) $(INCLUDE) -I$(PORTLIBS)/include
+# Include paths MUST be defined before CFLAGS (:= is immediate expansion)
+INCLUDE		:= -I$(INCLUDES) -I$(PSL1GHT)/ppu/include -I$(PORTLIBS)/include
+
+CFLAGS		:= -O2 -Wall -mcpu=cell $(MACHDEP) $(INCLUDE)
 CXXFLAGS	:= $(CFLAGS)
 LDFLAGS		:= $(MACHDEP) -L$(PORTLIBS)/lib -ltiny3d -lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm -lsysmodule -lc
 
@@ -18,9 +26,7 @@ CFILES		:= $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:= $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 OFILES		:= $(addprefix $(BUILD)/,$(CFILES:.c=.o) $(CPPFILES:.cpp=.o))
 
-INCLUDE		:= -I$(INCLUDES) -I$(PSL1GHT)/ppu/include -I$(PORTLIBS)/include
-
-.PHONY: all clean
+.PHONY: all clean install
 
 all: $(BUILD)/$(TARGET).elf $(BUILD)/$(TARGET).self
 

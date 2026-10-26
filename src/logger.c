@@ -1,17 +1,15 @@
 /*
- * Dual-path logger for PS3 homebrew.
+ * Dual-path logger for PS3 homebrew (PSL1GHT).
  * Writes simultaneously to:
  *   /dev_hdd0/tmp/boardgame.log
  *   /dev_usb000/boardgame.log  (or /dev_usb001 if 000 unavailable)
- * Captures function entry/exit, state changes, errors, frame timing hints,
- * and any recoverable faults so black-screens / hangs can be diagnosed offline.
  */
 
 #include "logger.h"
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/time.h>
-#include <cell/cell_fs.h>
+#include <sys/file.h>
 
 static FILE *g_log_hdd = NULL;
 static FILE *g_log_usb = NULL;
@@ -42,13 +40,12 @@ static int try_open_usb(void)
     };
     int i;
     for (i = 0; candidates[i]; ++i) {
-        /* ensure directory exists (best-effort) */
         char dir[64];
         strncpy(dir, candidates[i], sizeof(dir) - 1);
         dir[sizeof(dir)-1] = '\0';
         char *slash = strrchr(dir, '/');
         if (slash) *slash = '\0';
-        cellFsMkdir(dir, 0777); /* ignore error */
+        sysFsMkdir(dir, 0777); /* ignore error */
 
         FILE *f = fopen(candidates[i], "a");
         if (f) {
@@ -66,7 +63,7 @@ void logger_init(void)
     if (g_initialized) return;
 
     /* HDD path – always try */
-    cellFsMkdir("/dev_hdd0/tmp", 0777);
+    sysFsMkdir("/dev_hdd0/tmp", 0777);
     g_log_hdd = fopen("/dev_hdd0/tmp/boardgame.log", "a");
 
     /* USB path – first available */
@@ -107,11 +104,11 @@ void logger_log(LogLevel level, const char *func, int line, const char *fmt, ...
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    /* Prefer system time; fall back to simple frame counter if unavailable */
-    double sec = 0.0;
-    uint64_t tick = 0;
-    if (sys_time_get_system_time(&tick, NULL) == 0)
-        sec = (double)tick / 1000000.0;
+    /* Use gettimeofday (PSL1GHT/newlib supports this) */
+    struct timeval tv;
+    double sec;
+    if (gettimeofday(&tv, NULL) == 0)
+        sec = (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
     else
         sec = (double)(++g_frame_counter) * 0.016;
 

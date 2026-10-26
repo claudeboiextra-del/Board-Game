@@ -1,5 +1,5 @@
-/* Board Game core - restored + field inits
- * Minigames: Mash, Timing, Reaction (HOLD/COUNT share reaction until next polish pass)
+/* Board Game core
+ * Minigames: Mash, Timing, Reaction, Hold, Count — snappy pacing
  */
 #include "game.h"
 #include "logger.h"
@@ -10,16 +10,18 @@
 
 static Board g_boards[BOARD_COUNT];
 
-#define HOP_FRAMES 9
-#define LAND_HOLD 32
-#define DICE_CPU_DELAY 36
-#define ROUND_HOLD 40
-#define ITEM_CPU_DELAY 20
-#define MG_INTRO_HOLD 70
-#define MG_RESULT_HOLD 90
-#define MG_MASH_TIME 120
-#define MG_TIMING_TIME 180
-#define MG_REACT_MAX 150
+#define HOP_FRAMES 6
+#define LAND_HOLD 22
+#define DICE_CPU_DELAY 22
+#define ROUND_HOLD 28
+#define ITEM_CPU_DELAY 14
+#define MG_INTRO_HOLD 50
+#define MG_RESULT_HOLD 70
+#define MG_MASH_TIME 100
+#define MG_TIMING_TIME 140
+#define MG_REACT_MAX 120
+#define MG_HOLD_MAX 120
+#define MG_COUNT_MAX 130
 
 static const int MG_PAYOUT[4] = {15, 10, 5, 2};
 
@@ -30,7 +32,7 @@ static int rand_range(int lo, int hi) {
 
 static void spawn_popup(GameContext *g, float x, float y, int value, int kind) {
     g->popup.active = 1; g->popup.x = x; g->popup.y = y;
-    g->popup.value = value; g->popup.kind = kind; g->popup.life = 1.3f;
+    g->popup.value = value; g->popup.kind = kind; g->popup.life = 1.1f;
 }
 
 static void spawn_fx(GameContext *g, float x, float y, uint32_t color, int count) {
@@ -40,9 +42,9 @@ static void spawn_fx(GameContext *g, float x, float y, uint32_t color, int count
         g->fx[i].active = 1;
         g->fx[i].x = x + (float)rand_range(-6, 6);
         g->fx[i].y = y + (float)rand_range(-4, 4);
-        g->fx[i].vx = (float)rand_range(-40, 40) * 0.08f;
-        g->fx[i].vy = (float)rand_range(-60, -10) * 0.08f;
-        g->fx[i].life = 0.4f + (float)rand_range(0, 20) * 0.02f;
+        g->fx[i].vx = (float)rand_range(-40, 40) * 0.1f;
+        g->fx[i].vy = (float)rand_range(-60, -10) * 0.1f;
+        g->fx[i].life = 0.35f + (float)rand_range(0, 20) * 0.02f;
         g->fx[i].color = color; n++;
     }
 }
@@ -74,20 +76,24 @@ static ItemType random_item(void) {
 static void mg_begin(GameContext *g) {
     int i;
     g->mg_type = (MiniGameType)rand_range(0, MG_COUNT - 1);
-    if (g->mg_type > MG_REACTION) g->mg_type = (MiniGameType)(g->mg_type % 3); /* map HOLD/COUNT to first 3 until full logic lands */
-    g->mg_timer = 0; g->mg_meter = 0; g->mg_marker = 0.15f; g->mg_marker_dir = 1;
-    g->mg_go_at = 45 + rand_range(0, 55); g->mg_pressed = 0; g->mg_human_score = 0;
+    g->mg_timer = 0; g->mg_meter = 0; g->mg_marker = 0.12f; g->mg_marker_dir = 1;
+    g->mg_go_at = 35 + rand_range(0, 40); g->mg_pressed = 0; g->mg_human_score = 0;
     g->mg_awarded = false; g->mg_hold_frames = 0; g->mg_flash_count = 0; g->mg_phase = 0;
-    g->mg_target = 55; g->mg_next_flash = 25;
+    g->mg_target = 40 + rand_range(0, 25);
+    if (g->mg_type == MG_COUNT) {
+        g->mg_target = 3 + rand_range(0, 3);
+        g->mg_next_flash = 18;
+    }
     for (i = 0; i < g->player_count; ++i) { g->players[i].mg_score = 0; g->players[i].mg_rank = i; }
     g->state = STATE_MG_INTRO; g->state_timer = 0;
-    LOG_I("Minigame type %d", (int)g->mg_type);
+    LOG_I("Minigame type %d target %d", (int)g->mg_type, g->mg_target);
 }
 
 static int cpu_mg_score(Player *p, MiniGameType t) {
     int base = 55, noise = rand_range(-15, 15);
     if (p->diff == DIFF_HARD) base = 78;
     else if (p->diff == DIFF_EASY) base = 35;
+    if (t == MG_HOLD || t == MG_COUNT) base += 3;
     base += noise; if (base < 5) base = 5; if (base > 100) base = 100;
     return base;
 }
@@ -209,7 +215,7 @@ static void apply_land(GameContext *g, Player *p) {
 
 static void do_shop(GameContext *g, Player *p, uint32_t buttons) {
     if (!p->is_human) {
-        if (g->state_timer < 22) return;
+        if (g->state_timer < 16) return;
         if (p->coins >= 20 && (p->stars < 3 || p->diff == DIFF_HARD)) { p->coins -= 20; p->stars += 1; relocate_star(g); }
         else if (p->coins >= 8 && p->item_count < MAX_ITEMS) { p->coins -= 8; give_item(p, random_item()); }
         g->state = STATE_TURN_START; return;
@@ -257,8 +263,8 @@ static void update_fx(GameContext *g) {
     int i;
     for (i = 0; i < MAX_FX; ++i) {
         if (!g->fx[i].active) continue;
-        g->fx[i].x += g->fx[i].vx; g->fx[i].y += g->fx[i].vy; g->fx[i].vy += 0.15f;
-        g->fx[i].life -= 0.016f; if (g->fx[i].life <= 0) g->fx[i].active = 0;
+        g->fx[i].x += g->fx[i].vx; g->fx[i].y += g->fx[i].vy; g->fx[i].vy += 0.18f;
+        g->fx[i].life -= 0.02f; if (g->fx[i].life <= 0) g->fx[i].active = 0;
     }
 }
 
@@ -269,19 +275,19 @@ static void update_display_positions(GameContext *g) {
         node_world(g, pl->node, &tx, &ty); tx += (float)(i % 4) * 10.0f - 15.0f;
         if (pl->hop_t < 1.0f) {
             float t, e, ax, ay, arc;
-            pl->hop_t += 0.11f; if (pl->hop_t > 1.0f) pl->hop_t = 1.0f;
+            pl->hop_t += 0.16f; if (pl->hop_t > 1.0f) pl->hop_t = 1.0f;
             t = pl->hop_t; e = t * t * (3.0f - 2.0f * t);
             ax = pl->disp_x + (tx - pl->disp_x) * e; ay = pl->disp_y + (ty - pl->disp_y) * e;
-            arc = sinf(t * 3.14159f) * 12.0f; pl->disp_x = ax; pl->disp_y = ay - arc;
-            pl->shadow_s = 0.55f + 0.45f * (1.0f - sinf(t * 3.14159f));
+            arc = sinf(t * 3.14159f) * 14.0f; pl->disp_x = ax; pl->disp_y = ay - arc;
+            pl->shadow_s = 0.5f + 0.5f * (1.0f - sinf(t * 3.14159f));
         } else {
             float dx = tx - pl->disp_x, dy = ty - pl->disp_y;
             if (dx*dx + dy*dy < 0.25f) { pl->disp_x = tx; pl->disp_y = ty; }
-            else { pl->disp_x += dx * 0.22f; pl->disp_y += dy * 0.22f; }
-            pl->shadow_s += (1.0f - pl->shadow_s) * 0.15f;
+            else { pl->disp_x += dx * 0.32f; pl->disp_y += dy * 0.32f; }
+            pl->shadow_s += (1.0f - pl->shadow_s) * 0.2f;
         }
     }
-    if (g->popup.active) { g->popup.life -= 0.016f; g->popup.y -= 0.7f; if (g->popup.life <= 0) g->popup.active = 0; }
+    if (g->popup.active) { g->popup.life -= 0.02f; g->popup.y -= 0.9f; if (g->popup.life <= 0) g->popup.active = 0; }
     update_fx(g);
 }
 
@@ -346,7 +352,7 @@ void game_update(GameContext *g, uint32_t buttons) {
                 if (g->double_dice) { g->dice_value2 = rand_range(1, 6); g->move_remaining = g->dice_value + g->dice_value2 + g->boost_steps; }
                 else { g->dice_value2 = 0; g->move_remaining = g->dice_value + g->boost_steps; }
                 p->celebrating = (g->move_remaining >= 8);
-                g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 3;
+                g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 2;
                 spawn_fx(g, 760, 120, 0xFFFFFFFF, 8);
             }
         } else if (g->state_timer >= DICE_CPU_DELAY) {
@@ -356,7 +362,7 @@ void game_update(GameContext *g, uint32_t buttons) {
             if (g->double_dice) { g->dice_value2 = rand_range(1, 6); g->move_remaining = g->dice_value + g->dice_value2 + g->boost_steps; }
             else { g->dice_value2 = 0; g->move_remaining = g->dice_value + g->boost_steps; }
             p->celebrating = (g->move_remaining >= 8);
-            g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 3;
+            g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 2;
         } break;
     case STATE_MOVE:
         if (g->move_remaining <= 0) { g->state = STATE_LAND; g->state_timer = 0; break; }
@@ -384,36 +390,103 @@ void game_update(GameContext *g, uint32_t buttons) {
     case STATE_MG_INTRO:
         if (g->state_timer >= MG_INTRO_HOLD || (buttons & 0x10)) {
             g->state = STATE_MG_PLAY; g->state_timer = 0; g->mg_timer = 0;
-            g->mg_meter = 0; g->mg_marker = 0.15f; g->mg_marker_dir = 1; g->mg_pressed = 0; g->mg_human_score = 0;
+            g->mg_meter = 0; g->mg_marker = 0.12f; g->mg_marker_dir = 1;
+            g->mg_pressed = 0; g->mg_human_score = 0; g->mg_hold_frames = 0;
         } break;
     case STATE_MG_PLAY:
         g->mg_timer++;
         switch (g->mg_type) {
         case MG_MASH:
-            if (buttons & 0x10) { g->mg_meter += 0.048f; if (g->mg_meter > 1) g->mg_meter = 1; spawn_fx(g, 424, 280 - g->mg_meter * 120, 0xFF2ECC71, 2); }
-            g->mg_meter -= 0.0025f; if (g->mg_meter < 0) g->mg_meter = 0;
-            if (g->mg_timer >= MG_MASH_TIME) { g->mg_human_score = (int)(g->mg_meter * 100); mg_finish_play(g); }
+            if (buttons & 0x10) {
+                g->mg_meter += 0.055f;
+                if (g->mg_meter > 1) g->mg_meter = 1;
+                spawn_fx(g, 424, 280 - g->mg_meter * 120, 0xFF2ECC71, 2);
+            }
+            g->mg_meter -= 0.002f;
+            if (g->mg_meter < 0) g->mg_meter = 0;
+            if (g->mg_timer >= MG_MASH_TIME) {
+                g->mg_human_score = (int)(g->mg_meter * 100);
+                mg_finish_play(g);
+            }
             break;
         case MG_TIMING:
-            g->mg_marker += g->mg_marker_dir * 0.016f;
+            g->mg_marker += g->mg_marker_dir * 0.022f;
             if (g->mg_marker >= 1) { g->mg_marker = 1; g->mg_marker_dir = -1; }
             if (g->mg_marker <= 0) { g->mg_marker = 0; g->mg_marker_dir = 1; }
             if (buttons & 0x10 && !g->mg_pressed) {
                 float dist = fabsf(g->mg_marker - 0.5f);
                 g->mg_human_score = (int)((1.0f - dist * 2.0f) * 100.0f);
                 if (g->mg_human_score < 0) g->mg_human_score = 0;
-                g->mg_pressed = 1; spawn_fx(g, 200 + g->mg_marker * 448, 260, 0xFFF1C40F, 8); mg_finish_play(g);
-            } else if (g->mg_timer >= MG_TIMING_TIME) { g->mg_human_score = 5; mg_finish_play(g); }
+                g->mg_pressed = 1;
+                spawn_fx(g, 200 + g->mg_marker * 448, 260, 0xFFF1C40F, 8);
+                mg_finish_play(g);
+            } else if (g->mg_timer >= MG_TIMING_TIME) {
+                g->mg_human_score = 5;
+                mg_finish_play(g);
+            }
             break;
-        case MG_REACTION: case MG_HOLD: case MG_COUNT: default:
+        case MG_HOLD:
             if (buttons & 0x10) {
-                if (g->mg_timer < g->mg_go_at) { g->mg_human_score = 5; g->mg_pressed = 1; mg_finish_play(g); }
-                else if (!g->mg_pressed) {
-                    int delay = g->mg_timer - g->mg_go_at;
-                    g->mg_human_score = 100 - delay * 2; if (g->mg_human_score < 10) g->mg_human_score = 10;
-                    g->mg_pressed = 1; spawn_fx(g, 424, 240, 0xFF2ECC71, 10); mg_finish_play(g);
+                g->mg_hold_frames++;
+                g->mg_meter = (float)g->mg_hold_frames / (float)(g->mg_target + 25);
+                if (g->mg_meter > 1.0f) g->mg_meter = 1.0f;
+            } else if (g->mg_hold_frames > 3 && !g->mg_pressed) {
+                int diff = g->mg_hold_frames - g->mg_target;
+                if (diff < 0) diff = -diff;
+                g->mg_human_score = 100 - diff * 2;
+                if (g->mg_human_score < 5) g->mg_human_score = 5;
+                g->mg_pressed = 1;
+                spawn_fx(g, 424, 240, 0xFF3498DB, 8);
+                mg_finish_play(g);
+            } else if (g->mg_timer >= MG_HOLD_MAX) {
+                g->mg_human_score = 5;
+                mg_finish_play(g);
+            }
+            break;
+        case MG_COUNT:
+            if (g->mg_phase == 0) {
+                if (g->mg_timer >= g->mg_next_flash && g->mg_flash_count < g->mg_target) {
+                    g->mg_flash_count++;
+                    g->mg_next_flash = g->mg_timer + 14 + rand_range(0, 6);
+                    spawn_fx(g, 424, 220, 0xFFFFFFFF, 8);
                 }
-            } else if (g->mg_timer >= MG_REACT_MAX) { g->mg_human_score = 8; mg_finish_play(g); }
+                if (g->mg_flash_count >= g->mg_target && g->mg_timer > g->mg_next_flash + 15) {
+                    g->mg_phase = 1;
+                    g->mg_meter = 0;
+                }
+            } else {
+                if (buttons & 0x10)
+                    g->mg_meter += 1.0f;
+                if ((buttons & 0x20) || g->mg_timer >= MG_COUNT_MAX) {
+                    int presses = (int)g->mg_meter;
+                    int diff = presses - g->mg_target;
+                    if (diff < 0) diff = -diff;
+                    g->mg_human_score = (presses == g->mg_target) ? 100 : (100 - diff * 22);
+                    if (g->mg_human_score < 5) g->mg_human_score = 5;
+                    spawn_fx(g, 424, 240, 0xFF9B59B6, 8);
+                    mg_finish_play(g);
+                }
+            }
+            break;
+        case MG_REACTION:
+        default:
+            if (buttons & 0x10) {
+                if (g->mg_timer < g->mg_go_at) {
+                    g->mg_human_score = 5;
+                    g->mg_pressed = 1;
+                    mg_finish_play(g);
+                } else if (!g->mg_pressed) {
+                    int delay = g->mg_timer - g->mg_go_at;
+                    g->mg_human_score = 100 - delay * 2;
+                    if (g->mg_human_score < 10) g->mg_human_score = 10;
+                    g->mg_pressed = 1;
+                    spawn_fx(g, 424, 240, 0xFF2ECC71, 10);
+                    mg_finish_play(g);
+                }
+            } else if (g->mg_timer >= MG_REACT_MAX) {
+                g->mg_human_score = 8;
+                mg_finish_play(g);
+            }
             break;
         } break;
     case STATE_MG_RESULT:

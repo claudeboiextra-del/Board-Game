@@ -6,7 +6,7 @@
   <value name="LICENSE" type="string">This software is free homebrew. No warranty.</value>
   <value name="RESOLUTION" type="int">1</value>
   <value name="SOUND_FORMAT" type="int">1</value>
-  <value name="TITLE" type="string">Sky Circuit</value>
-  <value name="TITLE_ID" type="string">SKYC00001</value>
+  <value name="TITLE" type="string">Board Game</value>
+  <value name="TITLE_ID" type="string">BRDG00001</value>
   <value name="VERSION" type="string">1.00</value>
 </sfo>

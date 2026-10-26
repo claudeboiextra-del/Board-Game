@@ -1,6 +1,6 @@
 /*
- * Board Game – fun pass
- * Items, double dice, team mode, sparks, paced hops, shops, contests.
+ * Board Game – core + minigames
+ * Mash / Timing / Reaction with intro → play → ranked coin payout.
  */
 
 #include "game.h"
@@ -15,9 +15,16 @@ static Board g_boards[BOARD_COUNT];
 #define HOP_FRAMES      9
 #define LAND_HOLD       32
 #define DICE_CPU_DELAY  36
-#define ROUND_HOLD      45
-#define CONTEST_HOLD    50
+#define ROUND_HOLD      40
 #define ITEM_CPU_DELAY  20
+#define MG_INTRO_HOLD   70
+#define MG_RESULT_HOLD  90
+#define MG_MASH_TIME    120
+#define MG_TIMING_TIME  180
+#define MG_REACT_MAX    150
+
+/* coin payout by rank (0 = winner) */
+static const int MG_PAYOUT[4] = { 15, 10, 5, 2 };
 
 static int rand_range(int lo, int hi)
 {
@@ -28,10 +35,8 @@ static int rand_range(int lo, int hi)
 static void spawn_popup(GameContext *g, float x, float y, int value, int kind)
 {
     g->popup.active = 1;
-    g->popup.x = x;
-    g->popup.y = y;
-    g->popup.value = value;
-    g->popup.kind = kind;
+    g->popup.x = x; g->popup.y = y;
+    g->popup.value = value; g->popup.kind = kind;
     g->popup.life = 1.3f;
 }
 
@@ -68,8 +73,7 @@ static int give_item(Player *p, ItemType it)
 
 static ItemType take_item(Player *p, int slot)
 {
-    ItemType it;
-    int i;
+    ItemType it; int i;
     if (slot < 0 || slot >= p->item_count) return ITEM_NONE;
     it = p->items[slot];
     for (i = slot; i < p->item_count - 1; ++i)
@@ -86,6 +90,107 @@ static ItemType random_item(void)
     return pool[rand_range(0, 4)];
 }
 
+/* ---------- minigame helpers ---------- */
+
+static void mg_begin(GameContext *g)
+{
+    int i;
+    g->mg_type = (MiniGameType)rand_range(0, MG_COUNT - 1);
+    g->mg_timer = 0;
+    g->mg_meter = 0.0f;
+    g->mg_marker = 0.0f;
+    g->mg_marker_dir = 1.0f;
+    g->mg_go_at = 40 + rand_range(0, 50);
+    g->mg_pressed = 0;
+    g->mg_human_score = 0;
+    g->mg_awarded = false;
+    for (i = 0; i < g->player_count; ++i) {
+        g->players[i].mg_score = 0;
+        g->players[i].mg_rank = i;
+    }
+    g->state = STATE_MG_INTRO;
+    g->state_timer = 0;
+    LOG_I("Minigame type %d", (int)g->mg_type);
+}
+
+static int cpu_mg_score(Player *p, MiniGameType t)
+{
+    int base, noise;
+    switch (t) {
+        case MG_MASH:
+            base = (p->diff == DIFF_HARD) ? 70 : (p->diff == DIFF_EASY ? 35 : 55);
+            noise = rand_range(-12, 15);
+            break;
+        case MG_TIMING:
+            /* distance from ideal 0.5 — invert to score */
+            base = (p->diff == DIFF_HARD) ? 85 : (p->diff == DIFF_EASY ? 40 : 65);
+            noise = rand_range(-20, 20);
+            break;
+        case MG_REACTION:
+        default:
+            base = (p->diff == DIFF_HARD) ? 80 : (p->diff == DIFF_EASY ? 30 : 55);
+            noise = rand_range(-15, 18);
+            break;
+    }
+    base += noise;
+    if (base < 5) base = 5;
+    if (base > 100) base = 100;
+    return base;
+}
+
+static void mg_rank_and_pay(GameContext *g)
+{
+    int i, j;
+    int order[MAX_PLAYERS];
+
+    if (g->mg_awarded) return;
+    g->mg_awarded = true;
+
+    for (i = 0; i < g->player_count; ++i)
+        order[i] = i;
+
+    /* sort by mg_score descending (simple bubble – n<=4) */
+    for (i = 0; i < g->player_count - 1; ++i) {
+        for (j = 0; j < g->player_count - 1 - i; ++j) {
+            if (g->players[order[j]].mg_score < g->players[order[j + 1]].mg_score) {
+                int tmp = order[j];
+                order[j] = order[j + 1];
+                order[j + 1] = tmp;
+            }
+        }
+    }
+
+    for (i = 0; i < g->player_count; ++i) {
+        int pid = order[i];
+        int pay = MG_PAYOUT[i < 4 ? i : 3];
+        g->players[pid].mg_rank = i;
+        g->players[pid].coins += pay;
+        g->contest_rewards[pid] = pay;
+        LOG_I("MG rank %d P%d score %d +%d coins", i, pid,
+              g->players[pid].mg_score, pay);
+    }
+
+    /* celebrate winner */
+    if (g->player_count > 0)
+        g->players[order[0]].celebrating = true;
+
+    spawn_fx(g, 424, 200, 0xFFF1C40F, 12);
+}
+
+static void mg_finish_play(GameContext *g)
+{
+    int i;
+    /* human score already set during play; fill CPUs */
+    for (i = 0; i < g->player_count; ++i) {
+        if (!g->players[i].is_human)
+            g->players[i].mg_score = cpu_mg_score(&g->players[i], g->mg_type);
+        else
+            g->players[i].mg_score = g->mg_human_score;
+    }
+    g->state = STATE_MG_RESULT;
+    g->state_timer = 0;
+}
+
 void game_init(GameContext *g)
 {
     int i;
@@ -100,7 +205,6 @@ void game_init(GameContext *g)
     g->board = &g_boards[0];
     g->player_count = 4;
     g->max_rounds = 15;
-    g->team_mode = false;
 
     for (i = 0; i < MAX_PLAYERS; ++i) {
         float x, y;
@@ -117,11 +221,8 @@ void game_init(GameContext *g)
         g->players[i].disp_y = y;
         g->players[i].hop_t = 1.0f;
     }
-
-    /* starter item for human so they can try systems immediately */
     give_item(&g->players[0], ITEM_DOUBLE_DICE);
-
-    LOG_I("Game ready – items + team option");
+    LOG_I("Game ready with minigames");
 }
 
 static void relocate_star(GameContext *g)
@@ -135,10 +236,8 @@ static void relocate_star(GameContext *g)
 
     if (g->board->nodes[g->board->star_node].type == SPACE_STAR)
         g->board->nodes[g->board->star_node].type = SPACE_NORMAL;
-
     g->board->star_node = new_node;
     g->board->nodes[new_node].type = SPACE_STAR;
-    LOG_I("Star -> node %d", new_node);
 }
 
 static int cpu_choose_path(GameContext *g, Player *p, int from)
@@ -146,9 +245,7 @@ static int cpu_choose_path(GameContext *g, Player *p, int from)
     BoardNode *n = &g->board->nodes[from];
     int best, score_best, i;
     if (n->next_count <= 1) return n->next[0];
-
-    best = n->next[0];
-    score_best = -999;
+    best = n->next[0]; score_best = -999;
     for (i = 0; i < n->next_count; ++i) {
         int cand = n->next[i];
         int score = 0;
@@ -180,17 +277,14 @@ static void start_hop(GameContext *g, Player *p, int next_node)
 static void apply_land(GameContext *g, Player *p)
 {
     BoardNode *n = &g->board->nodes[p->node];
-    float px, py;
-    int delta;
-
+    float px, py; int delta;
     node_world(g, p->node, &px, &py);
     g->last_land_type = (int)n->type;
     g->land_flash = LAND_HOLD;
 
     switch (n->type) {
         case SPACE_PLUS_COIN:
-            delta = 3 + rand_range(0, 3);
-            p->coins += delta;
+            delta = 3 + rand_range(0, 3); p->coins += delta;
             spawn_popup(g, px, py - 30, delta, 0);
             spawn_fx(g, px, py, 0xFF2ECC71, 6);
             break;
@@ -201,8 +295,7 @@ static void apply_land(GameContext *g, Player *p)
                 spawn_fx(g, px, py, 0xFF3498DB, 5);
             } else {
                 delta = 3 + rand_range(0, 1);
-                p->coins -= delta;
-                if (p->coins < 0) p->coins = 0;
+                p->coins -= delta; if (p->coins < 0) p->coins = 0;
                 spawn_popup(g, px, py - 30, -delta, 2);
                 spawn_fx(g, px, py, 0xFFE74C3C, 5);
             }
@@ -223,71 +316,56 @@ static void apply_land(GameContext *g, Player *p)
             break;
         case SPACE_SHOP:
             spawn_popup(g, px, py - 30, 0, 3);
-            g->state = STATE_SHOP;
-            g->state_timer = 0;
-            g->item_cursor = 0;
+            g->state = STATE_SHOP; g->state_timer = 0; g->item_cursor = 0;
             return;
         case SPACE_STAR:
             if (p->coins >= 20) {
-                p->coins -= 20;
-                p->stars += 1;
+                p->coins -= 20; p->stars += 1;
                 spawn_popup(g, px, py - 30, 1, 1);
                 spawn_fx(g, px, py, 0xFFF1C40F, 12);
-                p->celebrating = true;
-                relocate_star(g);
-            } else {
-                spawn_popup(g, px, py - 30, 0, 2);
-            }
+                p->celebrating = true; relocate_star(g);
+            } else spawn_popup(g, px, py - 30, 0, 2);
             break;
         case SPACE_HIDDEN_COIN:
             if (!n->hidden_revealed) {
-                n->hidden_revealed = true;
-                p->coins += 12;
+                n->hidden_revealed = true; p->coins += 12;
                 spawn_popup(g, px, py - 30, 12, 0);
                 spawn_fx(g, px, py, 0xFF1ABC9C, 8);
             }
             break;
         case SPACE_HIDDEN_STAR:
             if (!n->hidden_revealed) {
-                n->hidden_revealed = true;
-                p->stars += 1;
+                n->hidden_revealed = true; p->stars += 1;
                 spawn_popup(g, px, py - 30, 1, 1);
                 spawn_fx(g, px, py, 0xFFF1C40F, 10);
                 p->celebrating = true;
             }
             break;
-        default:
-            break;
+        default: break;
     }
 }
 
 static void do_shop(GameContext *g, Player *p, uint32_t buttons)
 {
-    /* shop offers: 0=star(20), 1=random item(8), 2=leave */
     if (!p->is_human) {
         if (g->state_timer < 22) return;
         if (p->coins >= 20 && (p->stars < 3 || p->diff == DIFF_HARD)) {
             p->coins -= 20; p->stars += 1; relocate_star(g);
             spawn_fx(g, p->disp_x, p->disp_y, 0xFFF1C40F, 8);
         } else if (p->coins >= 8 && p->item_count < MAX_ITEMS) {
-            p->coins -= 8;
-            give_item(p, random_item());
+            p->coins -= 8; give_item(p, random_item());
         }
         g->state = STATE_TURN_START;
         return;
     }
-
-    if (buttons & 0x20)
-        g->item_cursor = (g->item_cursor + 1) % 3;
-
+    if (buttons & 0x20) g->item_cursor = (g->item_cursor + 1) % 3;
     if (buttons & 0x10) {
         if (g->item_cursor == 0 && p->coins >= 20) {
             p->coins -= 20; p->stars += 1; relocate_star(g);
             spawn_fx(g, p->disp_x, p->disp_y, 0xFFF1C40F, 10);
             p->celebrating = true;
         } else if (g->item_cursor == 1 && p->coins >= 8 && p->item_count < MAX_ITEMS) {
-            p->coins -= 8;
-            give_item(p, random_item());
+            p->coins -= 8; give_item(p, random_item());
             spawn_fx(g, p->disp_x, p->disp_y, 0xFF9B59B6, 6);
         }
         g->state = STATE_TURN_START;
@@ -297,8 +375,7 @@ static void do_shop(GameContext *g, Player *p, uint32_t buttons)
 static void use_item(GameContext *g, Player *p, int slot)
 {
     ItemType it = take_item(p, slot);
-    int i, best, best_coins;
-
+    int i, best = -1, best_coins = -1;
     switch (it) {
         case ITEM_DOUBLE_DICE:
             g->double_dice = true;
@@ -309,19 +386,16 @@ static void use_item(GameContext *g, Player *p, int slot)
             spawn_popup(g, p->disp_x, p->disp_y - 40, 3, 5);
             break;
         case ITEM_STEAL:
-            best = -1; best_coins = -1;
             for (i = 0; i < g->player_count; ++i) {
                 if (i == p->id) continue;
                 if (g->team_mode && g->players[i].team == p->team) continue;
                 if (g->players[i].coins > best_coins) {
-                    best_coins = g->players[i].coins;
-                    best = i;
+                    best_coins = g->players[i].coins; best = i;
                 }
             }
             if (best >= 0) {
                 int steal = (g->players[best].coins >= 5) ? 5 : g->players[best].coins;
-                g->players[best].coins -= steal;
-                p->coins += steal;
+                g->players[best].coins -= steal; p->coins += steal;
                 spawn_popup(g, p->disp_x, p->disp_y - 40, steal, 0);
                 spawn_fx(g, g->players[best].disp_x, g->players[best].disp_y, 0xFFE74C3C, 5);
             }
@@ -331,15 +405,18 @@ static void use_item(GameContext *g, Player *p, int slot)
             spawn_popup(g, p->disp_x, p->disp_y - 40, 1, 5);
             spawn_fx(g, p->disp_x, p->disp_y, 0xFF3498DB, 6);
             break;
-        default:
-            break;
+        default: break;
     }
 }
 
 static void next_player(GameContext *g)
 {
+    int i;
     g->double_dice = false;
     g->boost_steps = 0;
+    for (i = 0; i < g->player_count; ++i)
+        g->players[i].celebrating = false;
+
     g->current_player = (g->current_player + 1) % g->player_count;
     if (g->current_player == 0) {
         g->round++;
@@ -375,7 +452,6 @@ static void update_display_positions(GameContext *g)
         float tx, ty;
         node_world(g, pl->node, &tx, &ty);
         tx += (float)(i % 4) * 10.0f - 15.0f;
-
         if (pl->hop_t < 1.0f) {
             float t, e;
             pl->hop_t += 0.14f;
@@ -390,7 +466,6 @@ static void update_display_positions(GameContext *g)
             pl->disp_y += (ty - pl->disp_y) * 0.28f;
         }
     }
-
     if (g->popup.active) {
         g->popup.life -= 0.016f;
         g->popup.y -= 0.7f;
@@ -398,6 +473,8 @@ static void update_display_positions(GameContext *g)
     }
     update_fx(g);
 }
+
+/* ---------- main update ---------- */
 
 void game_update(GameContext *g, uint32_t buttons)
 {
@@ -414,18 +491,12 @@ void game_update(GameContext *g, uint32_t buttons)
 
     switch (g->state) {
     case STATE_TITLE:
-        if (buttons & 0x10) {
-            g->state = STATE_SETUP;
-            g->state_timer = 0;
-        }
+        if (buttons & 0x10) { g->state = STATE_SETUP; g->state_timer = 0; }
         break;
 
     case STATE_SETUP:
-        /* Circle: cycle player count; Square: toggle team mode */
-        if (buttons & 0x20)
-            g->player_count = (g->player_count % 4) + 1;
-        if (buttons & 0x40)
-            g->team_mode = !g->team_mode;
+        if (buttons & 0x20) g->player_count = (g->player_count % 4) + 1;
+        if (buttons & 0x40) g->team_mode = !g->team_mode;
         if (buttons & 0x10) {
             int i;
             for (i = 0; i < g->player_count; ++i) {
@@ -439,14 +510,12 @@ void game_update(GameContext *g, uint32_t buttons)
                 g->players[i].shielded = false;
                 g->players[i].team = g->team_mode ? ((i < 2) ? 0 : 1) : i;
                 node_world(g, g->players[i].node, &x, &y);
-                g->players[i].disp_x = x;
-                g->players[i].disp_y = y;
+                g->players[i].disp_x = x; g->players[i].disp_y = y;
                 g->players[i].hop_t = 1.0f;
             }
             if (g->players[0].is_human)
                 give_item(&g->players[0], ITEM_DOUBLE_DICE);
-            g->state = STATE_BOARD_SELECT;
-            g->state_timer = 0;
+            g->state = STATE_BOARD_SELECT; g->state_timer = 0;
         }
         break;
 
@@ -459,50 +528,38 @@ void game_update(GameContext *g, uint32_t buttons)
                 float x, y;
                 g->players[i].node = g->board->start_node;
                 node_world(g, g->players[i].node, &x, &y);
-                g->players[i].disp_x = x;
-                g->players[i].disp_y = y;
+                g->players[i].disp_x = x; g->players[i].disp_y = y;
             }
         }
         if (buttons & 0x10) {
-            g->round = 1;
-            g->current_player = 0;
-            g->state = STATE_TURN_START;
-            g->state_timer = 0;
+            g->round = 1; g->current_player = 0;
+            g->state = STATE_TURN_START; g->state_timer = 0;
         }
         break;
 
     case STATE_TURN_START:
         p->celebrating = false;
-        g->dice_value = 0;
-        g->dice_value2 = 0;
+        g->dice_value = g->dice_value2 = 0;
         g->move_remaining = 0;
-        g->double_dice = false;
-        g->boost_steps = 0;
-        g->branch_choice = 0;
-        g->item_cursor = 0;
-        if (p->item_count > 0)
-            g->state = STATE_ITEM;
-        else
-            g->state = STATE_DICE_ROLL;
+        g->double_dice = false; g->boost_steps = 0;
+        g->branch_choice = 0; g->item_cursor = 0;
+        g->state = (p->item_count > 0) ? STATE_ITEM : STATE_DICE_ROLL;
         g->state_timer = 0;
         break;
 
     case STATE_ITEM:
         if (p->is_human) {
             if (buttons & 0x20 && p->item_count > 0)
-                g->item_cursor = (g->item_cursor + 1) % (p->item_count + 1); /* last = skip */
+                g->item_cursor = (g->item_cursor + 1) % (p->item_count + 1);
             if (buttons & 0x10) {
                 if (g->item_cursor < p->item_count)
                     use_item(g, p, g->item_cursor);
-                g->state = STATE_DICE_ROLL;
-                g->state_timer = 0;
+                g->state = STATE_DICE_ROLL; g->state_timer = 0;
             }
         } else if (g->state_timer >= ITEM_CPU_DELAY) {
-            /* CPU: use steal/shield/double opportunistically */
             if (p->item_count > 0 && rand_range(0, 2) != 0)
                 use_item(g, p, 0);
-            g->state = STATE_DICE_ROLL;
-            g->state_timer = 0;
+            g->state = STATE_DICE_ROLL; g->state_timer = 0;
         }
         break;
 
@@ -518,12 +575,8 @@ void game_update(GameContext *g, uint32_t buttons)
                     g->move_remaining = g->dice_value + g->boost_steps;
                 }
                 p->celebrating = (g->move_remaining >= 8);
-                g->state = STATE_MOVE;
-                g->state_timer = 0;
-                g->hop_cooldown = 3;
+                g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 3;
                 spawn_fx(g, 760, 120, 0xFFFFFFFF, 8);
-                LOG_I("Roll %d+%d +boost%d = %d", g->dice_value, g->dice_value2,
-                      g->boost_steps, g->move_remaining);
             }
         } else if (g->state_timer >= DICE_CPU_DELAY) {
             int bias = (p->diff == DIFF_HARD) ? 1 : (p->diff == DIFF_EASY ? -1 : 0);
@@ -538,31 +591,22 @@ void game_update(GameContext *g, uint32_t buttons)
                 g->move_remaining = g->dice_value + g->boost_steps;
             }
             p->celebrating = (g->move_remaining >= 8);
-            g->state = STATE_MOVE;
-            g->state_timer = 0;
-            g->hop_cooldown = 3;
+            g->state = STATE_MOVE; g->state_timer = 0; g->hop_cooldown = 3;
         }
         break;
 
     case STATE_MOVE:
         if (g->move_remaining <= 0) {
-            g->state = STATE_LAND;
-            g->state_timer = 0;
-            break;
+            g->state = STATE_LAND; g->state_timer = 0; break;
         }
         if (g->hop_cooldown > 0) break;
-
         n = &g->board->nodes[p->node];
         if (n->next_count == 0) {
-            g->move_remaining = 0;
-            g->state = STATE_LAND;
-            g->state_timer = 0;
+            g->move_remaining = 0; g->state = STATE_LAND; g->state_timer = 0;
         } else if (n->next_count == 1) {
             start_hop(g, p, n->next[0]);
         } else if (p->is_human) {
-            g->branch_choice = 0;
-            g->state = STATE_BRANCH;
-            g->state_timer = 0;
+            g->branch_choice = 0; g->state = STATE_BRANCH; g->state_timer = 0;
         } else {
             start_hop(g, p, cpu_choose_path(g, p, p->node));
         }
@@ -578,48 +622,106 @@ void game_update(GameContext *g, uint32_t buttons)
             n = &g->board->nodes[p->node];
             if (g->branch_choice >= n->next_count) g->branch_choice = 0;
             start_hop(g, p, n->next[g->branch_choice]);
-            g->state = STATE_MOVE;
-            g->state_timer = 0;
+            g->state = STATE_MOVE; g->state_timer = 0;
         }
         break;
 
     case STATE_LAND:
-        if (g->state_timer == 1)
-            apply_land(g, p);
+        if (g->state_timer == 1) apply_land(g, p);
         if (g->state == STATE_SHOP) break;
         if (g->state_timer >= LAND_HOLD) {
-            if ((g->round % 3) == 0 && g->current_player == g->player_count - 1) {
-                g->state = STATE_MINIGAME_SIM;
-                g->state_timer = 0;
-            } else {
+            /* every 3rd full round, after last player lands → minigame */
+            if ((g->round % 3) == 0 && g->current_player == g->player_count - 1)
+                mg_begin(g);
+            else
                 next_player(g);
-            }
         }
         break;
 
     case STATE_SHOP:
         do_shop(g, p, buttons);
-        if (g->state != STATE_SHOP)
-            next_player(g);
+        if (g->state != STATE_SHOP) next_player(g);
         break;
 
-    case STATE_MINIGAME_SIM:
-        if (g->state_timer == 1) {
-            int i;
-            for (i = 0; i < g->player_count; ++i) {
-                int roll = rand_range(0, 100);
-                int bonus;
-                if (g->players[i].diff == DIFF_HARD) roll += 12;
-                if (g->players[i].is_human) roll += 8;
-                if (roll > 75) bonus = 12;
-                else if (roll > 45) bonus = 6;
-                else bonus = 3;
-                g->players[i].coins += bonus;
-                g->contest_rewards[i] = bonus;
-                spawn_fx(g, g->players[i].disp_x, g->players[i].disp_y, 0xFF9B59B6, 4);
-            }
+    /* ===== MINIGAMES ===== */
+    case STATE_MG_INTRO:
+        if (g->state_timer >= MG_INTRO_HOLD || (buttons & 0x10)) {
+            g->state = STATE_MG_PLAY;
+            g->state_timer = 0;
+            g->mg_timer = 0;
+            g->mg_meter = 0.0f;
+            g->mg_marker = 0.15f;
+            g->mg_marker_dir = 1.0f;
+            g->mg_pressed = 0;
+            g->mg_human_score = 0;
         }
-        if (g->state_timer >= CONTEST_HOLD)
+        break;
+
+    case STATE_MG_PLAY:
+        g->mg_timer++;
+        switch (g->mg_type) {
+        case MG_MASH:
+            /* mash Cross to fill meter; score = fill% at end */
+            if (buttons & 0x10) {
+                g->mg_meter += 0.045f;
+                if (g->mg_meter > 1.0f) g->mg_meter = 1.0f;
+                spawn_fx(g, 424, 280 - g->mg_meter * 120, 0xFF2ECC71, 2);
+            }
+            /* slight decay so you must keep mashing */
+            g->mg_meter -= 0.003f;
+            if (g->mg_meter < 0.0f) g->mg_meter = 0.0f;
+            if (g->mg_timer >= MG_MASH_TIME) {
+                g->mg_human_score = (int)(g->mg_meter * 100.0f);
+                mg_finish_play(g);
+            }
+            break;
+
+        case MG_TIMING:
+            /* marker oscillates; Cross locks it. score = closeness to 0.5 */
+            g->mg_marker += g->mg_marker_dir * 0.018f;
+            if (g->mg_marker >= 1.0f) { g->mg_marker = 1.0f; g->mg_marker_dir = -1.0f; }
+            if (g->mg_marker <= 0.0f) { g->mg_marker = 0.0f; g->mg_marker_dir = 1.0f; }
+            if (buttons & 0x10 && !g->mg_pressed) {
+                float dist = fabsf(g->mg_marker - 0.5f);
+                g->mg_human_score = (int)((1.0f - dist * 2.0f) * 100.0f);
+                if (g->mg_human_score < 0) g->mg_human_score = 0;
+                g->mg_pressed = 1;
+                spawn_fx(g, 200 + g->mg_marker * 448, 260, 0xFFF1C40F, 8);
+                mg_finish_play(g);
+            } else if (g->mg_timer >= MG_TIMING_TIME) {
+                g->mg_human_score = 5;
+                mg_finish_play(g);
+            }
+            break;
+
+        case MG_REACTION:
+        default:
+            /* early press = fail; after GO, faster = higher score */
+            if (buttons & 0x10) {
+                if (g->mg_timer < g->mg_go_at) {
+                    g->mg_human_score = 5; /* false start */
+                    g->mg_pressed = 1;
+                    mg_finish_play(g);
+                } else if (!g->mg_pressed) {
+                    int delay = g->mg_timer - g->mg_go_at;
+                    g->mg_human_score = 100 - delay * 2;
+                    if (g->mg_human_score < 10) g->mg_human_score = 10;
+                    g->mg_pressed = 1;
+                    spawn_fx(g, 424, 240, 0xFF2ECC71, 10);
+                    mg_finish_play(g);
+                }
+            } else if (g->mg_timer >= MG_REACT_MAX) {
+                g->mg_human_score = 8;
+                mg_finish_play(g);
+            }
+            break;
+        }
+        break;
+
+    case STATE_MG_RESULT:
+        if (g->state_timer == 1)
+            mg_rank_and_pay(g);
+        if (g->state_timer >= MG_RESULT_HOLD || (buttons & 0x10))
             next_player(g);
         break;
 

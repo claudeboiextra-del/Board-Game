@@ -1,4 +1,4 @@
-/* Two distinct board layouts for Sky Circuit */
+/* Two distinct board layouts for Board Game */
 
 #include "game.h"
 #include "logger.h"

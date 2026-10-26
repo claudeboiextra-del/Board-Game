@@ -1,5 +1,5 @@
 /*
- * Sky Circuit – PS3 homebrew board game
+ * Board Game – PS3 homebrew
  * PSL1GHT + Tiny3D, DualShock 3, dual logging to HDD + USB
  */
 
@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
 
     /* logging first so we capture everything */
     logger_init();
-    LOG_I("Sky Circuit boot – PSL1GHT / Tiny3D");
+    LOG_I("Board Game boot – PSL1GHT / Tiny3D");
 
     sysUtilRegisterCallback(0, sysutil_callback, NULL);
 

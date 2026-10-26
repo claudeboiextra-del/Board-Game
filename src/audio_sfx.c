@@ -1,37 +1,34 @@
 /*
  * Tiny synthesizer SFX for PS3 (PSL1GHT audio port)
- * No WAV assets – pure square/saw blips, light on the Cell.
+ * Pure square/saw blips – no WAV files.
  */
 #include "audio_sfx.h"
 #include "logger.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
-
 #include <audio/audio.h>
-#include <sys/thread.h>
 
-#define SFX_RATE        48000
-#define SFX_CHANNELS    2
-#define SFX_BLOCK       256
-#define SFX_BLOCKS      8
+#define SFX_RATE     48000
+#define SFX_CH       2
+#define SFX_SAMPLES  256
+#define SFX_BLOCKS   8
 
-static int          sfx_ready = 0;
-static u32          sfx_port = 0;
+static int             sfx_ready;
+static u32             sfx_port;
 static audioPortConfig sfx_cfg;
 
-/* active one-shot voice */
-static int          voice_on = 0;
-static float        voice_phase = 0.0f;
-static float        voice_freq = 440.0f;
-static float        voice_freq_end = 440.0f;
-static float        voice_amp = 0.0f;
-static int          voice_samples = 0;
-static int          voice_total = 0;
-static int          voice_wave = 0; /* 0=square 1=saw 2=noise */
+static int   voice_on;
+static float voice_phase;
+static float voice_freq;
+static float voice_freq_end;
+static float voice_amp;
+static int   voice_left;
+static int   voice_total;
+static int   voice_wave; /* 0 square, 1 saw */
 
-static float note_hz(int n) {
-    /* MIDI-ish: n=69 => A4=440 */
+static float note_hz(int n)
+{
     return 440.0f * powf(2.0f, (float)(n - 69) / 12.0f);
 }
 
@@ -41,9 +38,12 @@ int sfx_init(void)
     int ret;
 
     memset(&sfx_cfg, 0, sizeof(sfx_cfg));
+    sfx_ready = 0;
+    voice_on = 0;
+
     ret = audioInit();
-    if (ret != 0) {
-        LOG_W("audioInit failed %d – SFX disabled", ret);
+    if (ret) {
+        LOG_W("audioInit %d – SFX off", ret);
         return -1;
     }
 
@@ -53,30 +53,30 @@ int sfx_init(void)
     p.level       = 1.0f;
 
     ret = audioPortOpen(&p, &sfx_port);
-    if (ret != 0) {
-        LOG_W("audioPortOpen failed %d", ret);
+    if (ret) {
+        LOG_W("audioPortOpen %d", ret);
         audioQuit();
         return -1;
     }
 
     ret = audioGetPortConfig(sfx_port, &sfx_cfg);
-    if (ret != 0 || !sfx_cfg.audioDataStart) {
-        LOG_W("audioGetPortConfig failed");
+    if (ret || !sfx_cfg.audioDataStart) {
+        LOG_W("audioGetPortConfig fail");
         audioPortClose(sfx_port);
         audioQuit();
         return -1;
     }
 
     ret = audioPortStart(sfx_port);
-    if (ret != 0) {
-        LOG_W("audioPortStart failed %d", ret);
+    if (ret) {
+        LOG_W("audioPortStart %d", ret);
         audioPortClose(sfx_port);
         audioQuit();
         return -1;
     }
 
     sfx_ready = 1;
-    LOG_I("SFX audio port ready");
+    LOG_I("SFX ready (port %u, blocks %u)", sfx_port, sfx_cfg.numBlocks);
     return 0;
 }
 
@@ -100,97 +100,91 @@ void sfx_play(SfxId id)
     switch (id) {
     case SFX_CLICK:
         voice_freq = note_hz(76); voice_freq_end = note_hz(76);
-        voice_amp = 0.22f; voice_total = (int)(0.04f * SFX_RATE); voice_wave = 0;
+        voice_amp = 0.20f; voice_total = (int)(0.035f * SFX_RATE);
         break;
     case SFX_DICE:
-        voice_freq = note_hz(60); voice_freq_end = note_hz(72);
-        voice_amp = 0.28f; voice_total = (int)(0.12f * SFX_RATE); voice_wave = 1;
+        voice_freq = note_hz(60); voice_freq_end = note_hz(74);
+        voice_amp = 0.26f; voice_total = (int)(0.11f * SFX_RATE); voice_wave = 1;
         break;
     case SFX_HOP:
-        voice_freq = note_hz(67); voice_freq_end = note_hz(71);
-        voice_amp = 0.18f; voice_total = (int)(0.05f * SFX_RATE); voice_wave = 0;
+        voice_freq = note_hz(67); voice_freq_end = note_hz(72);
+        voice_amp = 0.16f; voice_total = (int)(0.045f * SFX_RATE);
         break;
     case SFX_LAND:
-        voice_freq = note_hz(55); voice_freq_end = note_hz(50);
-        voice_amp = 0.25f; voice_total = (int)(0.08f * SFX_RATE); voice_wave = 0;
+        voice_freq = note_hz(52); voice_freq_end = note_hz(46);
+        voice_amp = 0.22f; voice_total = (int)(0.07f * SFX_RATE);
         break;
     case SFX_COIN:
         voice_freq = note_hz(84); voice_freq_end = note_hz(96);
-        voice_amp = 0.26f; voice_total = (int)(0.10f * SFX_RATE); voice_wave = 0;
+        voice_amp = 0.24f; voice_total = (int)(0.09f * SFX_RATE);
         break;
     case SFX_STAR:
         voice_freq = note_hz(72); voice_freq_end = note_hz(96);
-        voice_amp = 0.30f; voice_total = (int)(0.22f * SFX_RATE); voice_wave = 0;
+        voice_amp = 0.28f; voice_total = (int)(0.20f * SFX_RATE);
         break;
     case SFX_FAIL:
-        voice_freq = note_hz(50); voice_freq_end = note_hz(40);
-        voice_amp = 0.24f; voice_total = (int)(0.14f * SFX_RATE); voice_wave = 1;
+        voice_freq = note_hz(48); voice_freq_end = note_hz(36);
+        voice_amp = 0.22f; voice_total = (int)(0.13f * SFX_RATE); voice_wave = 1;
         break;
     case SFX_WIN:
         voice_freq = note_hz(67); voice_freq_end = note_hz(91);
-        voice_amp = 0.32f; voice_total = (int)(0.28f * SFX_RATE); voice_wave = 0;
+        voice_amp = 0.30f; voice_total = (int)(0.26f * SFX_RATE);
         break;
     case SFX_COUNT_FLASH:
-        voice_freq = note_hz(88); voice_freq_end = note_hz(88);
-        voice_amp = 0.20f; voice_total = (int)(0.03f * SFX_RATE); voice_wave = 0;
+        voice_freq = note_hz(90); voice_freq_end = note_hz(90);
+        voice_amp = 0.18f; voice_total = (int)(0.028f * SFX_RATE);
         break;
     default:
         voice_on = 0;
         return;
     }
-    voice_samples = voice_total;
+    voice_left = voice_total;
 }
 
-static float sample_voice(void)
+static float gen_sample(void)
 {
     float t, env, f, s;
-    if (!voice_on || voice_samples <= 0) {
+    if (!voice_on || voice_left <= 0) {
         voice_on = 0;
         return 0.0f;
     }
-    t = 1.0f - (float)voice_samples / (float)voice_total;
-    env = 1.0f - t; /* linear decay */
+    t = 1.0f - (float)voice_left / (float)voice_total;
+    env = 1.0f - t;
     if (env < 0.0f) env = 0.0f;
     f = voice_freq + (voice_freq_end - voice_freq) * t;
     voice_phase += f / (float)SFX_RATE;
-    if (voice_phase >= 1.0f) voice_phase -= 1.0f;
+    if (voice_phase >= 1.0f) voice_phase -= (float)(int)voice_phase;
 
     if (voice_wave == 1)
-        s = voice_phase * 2.0f - 1.0f; /* saw */
-    else if (voice_wave == 2)
-        s = ((float)(rand() % 1000) / 500.0f) - 1.0f;
+        s = voice_phase * 2.0f - 1.0f;
     else
-        s = (voice_phase < 0.5f) ? 1.0f : -1.0f; /* square */
+        s = (voice_phase < 0.5f) ? 1.0f : -1.0f;
 
-    voice_samples--;
+    voice_left--;
     return s * voice_amp * env;
 }
 
 void sfx_update(void)
 {
-    u64 i, j;
-    float *buf;
-    u32 write_idx;
+    u32 i, b;
+    f32 *buf;
+    u64 read_idx;
 
     if (!sfx_ready || !sfx_cfg.audioDataStart) return;
 
-    /* fill as many free blocks as available */
-    for (j = 0; j < SFX_BLOCKS; ++j) {
-        write_idx = audioGetPortWriteIndex(sfx_port);
-        /* crude: always write next block slot – PSL1GHT ring */
-        buf = (float *)((u8 *)sfx_cfg.audioDataStart +
-              ((write_idx + j) % sfx_cfg.numBlocks) * sfx_cfg.channelCount * sfx_cfg.numBlocks * sizeof(float) / sfx_cfg.numBlocks);
-        /* Safer fill using documented layout */
-        buf = (float *)sfx_cfg.audioDataStart +
-              ((audioGetPortWriteIndex(sfx_port)) % sfx_cfg.numBlocks) *
-              (sfx_cfg.channelCount * SFX_BLOCK);
+    /*
+     * PSL1GHT stores the current read block index just before the buffer.
+     * Fill the next free block with mono→stereo samples.
+     */
+    read_idx = *(u64 *)((u8 *)sfx_cfg.audioDataStart - 8);
+    b = (u32)((read_idx + 1) % (sfx_cfg.numBlocks ? sfx_cfg.numBlocks : SFX_BLOCKS));
 
-        for (i = 0; i < SFX_BLOCK; ++i) {
-            float s = sample_voice();
-            buf[i * 2 + 0] = s;
-            buf[i * 2 + 1] = s;
-        }
-        /* only fill one block per frame to stay light */
-        break;
+    buf = (f32 *)((u8 *)sfx_cfg.audioDataStart +
+          b * sfx_cfg.channelCount * SFX_SAMPLES * sizeof(f32));
+
+    for (i = 0; i < SFX_SAMPLES; ++i) {
+        f32 s = gen_sample();
+        buf[i * 2 + 0] = s;
+        buf[i * 2 + 1] = s;
     }
 }

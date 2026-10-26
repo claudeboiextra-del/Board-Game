@@ -1,6 +1,6 @@
 /*
  * Board Game – PS3 homebrew
- * PSL1GHT + Tiny3D, DualShock 3, dual logging to HDD + USB
+ * PSL1GHT + Tiny3D, DualShock 3, dual logging, synth SFX
  */
 
 #include <stdio.h>
@@ -19,6 +19,7 @@
 
 #include "game.h"
 #include "logger.h"
+#include "audio_sfx.h"
 
 static int running = 1;
 static padInfo padinfo;
@@ -41,13 +42,11 @@ int main(int argc, char *argv[])
 {
     (void)argc; (void)argv;
 
-    /* logging first so we capture everything */
     logger_init();
     LOG_I("Board Game boot – PSL1GHT / Tiny3D");
 
     sysUtilRegisterCallback(0, sysutil_callback, NULL);
 
-    /* video + Tiny3D */
     if (tiny3d_Init(TINY3D_Z16 | 1024 * 1024) < 0) {
         LOG_F("tiny3d_Init failed");
         logger_shutdown();
@@ -57,6 +56,9 @@ int main(int argc, char *argv[])
 
     ioPadInit(7);
     LOG_I("Pad system ready");
+
+    if (sfx_init() != 0)
+        LOG_W("Running without SFX");
 
     GameContext game;
     game_init(&game);
@@ -72,20 +74,19 @@ int main(int argc, char *argv[])
         for (i = 0; i < MAX_PADS; ++i) {
             if (padinfo.status[i]) {
                 ioPadGetData(i, &paddata[i]);
-                /* map common DualShock 3 buttons */
-                if (paddata[i].BTN_CROSS)   buttons |= 0x10;
-                if (paddata[i].BTN_CIRCLE)  buttons |= 0x20;
-                if (paddata[i].BTN_SQUARE)  buttons |= 0x40;
+                if (paddata[i].BTN_CROSS)    buttons |= 0x10;
+                if (paddata[i].BTN_CIRCLE)   buttons |= 0x20;
+                if (paddata[i].BTN_SQUARE)   buttons |= 0x40;
                 if (paddata[i].BTN_TRIANGLE) buttons |= 0x80;
-                if (paddata[i].BTN_START)   buttons |= 0x100;
+                if (paddata[i].BTN_START)    buttons |= 0x100;
             }
         }
 
-        /* edge-trigger for most actions */
         uint32_t pressed = buttons & ~prev_buttons;
         prev_buttons = buttons;
 
         game_update(&game, pressed);
+        sfx_update();
         game_render(&game);
 
         if (game.state == STATE_EXIT) {
@@ -93,11 +94,11 @@ int main(int argc, char *argv[])
             running = 0;
         }
 
-        /* light frame pacing – keep CPU cool, feel responsive */
-        usleep(16000); /* ~60 fps target */
+        usleep(16000);
     }
 
     game_shutdown(&game);
+    sfx_shutdown();
     ioPadEnd();
     tiny3d_Exit();
     logger_shutdown();

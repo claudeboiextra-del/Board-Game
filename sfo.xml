@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<sfo>
+  <value name="APP_VER" type="string">01.00</value>
+  <value name="ATTRIBUTE" type="int">0</value>
+  <value name="CATEGORY" type="string">HG</value>
+  <value name="LICENSE" type="string">This software is free homebrew. No warranty.</value>
+  <value name="RESOLUTION" type="int">1</value>
+  <value name="SOUND_FORMAT" type="int">1</value>
+  <value name="TITLE" type="string">Sky Circuit</value>
+  <value name="TITLE_ID" type="string">SKYC00001</value>
+  <value name="VERSION" type="string">1.00</value>
+</sfo>

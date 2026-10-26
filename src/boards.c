@@ -6,7 +6,7 @@
 #include <string.h>
 #include <math.h>
 
-static void link(BoardNode *n, int a, int b)
+static void link_node(BoardNode *n, int a, int b)
 {
     if (n[a].next_count < 4) n[a].next[n[a].next_count++] = b;
 }
@@ -33,10 +33,10 @@ void board_load_visual(Board *b)
     }
 
     /* sequential path with a couple of shortcuts */
-    for (i = 0; i < 23; ++i) link(b->nodes, i, i + 1);
-    link(b->nodes, 23, 0);          /* close loop */
-    link(b->nodes, 5, 12);          /* shortcut */
-    link(b->nodes, 17, 3);          /* alternate */
+    for (i = 0; i < 23; ++i) link_node(b->nodes, i, i + 1);
+    link_node(b->nodes, 23, 0);          /* close loop */
+    link_node(b->nodes, 5, 12);          /* shortcut */
+    link_node(b->nodes, 17, 3);          /* alternate */
 
     /* sprinkle space types */
     b->nodes[2].type  = SPACE_PLUS_COIN;
@@ -77,20 +77,20 @@ void board_load_geo(Board *b)
     }
 
     /* main spine + branches */
-    for (i = 0; i < 7; ++i)  link(b->nodes, i, i + 1);
-    link(b->nodes, 7, 8);
-    for (i = 8; i < 15; ++i) link(b->nodes, i, i + 1);
-    link(b->nodes, 15, 16);
-    for (i = 16; i < 23; ++i) link(b->nodes, i, i + 1);
-    link(b->nodes, 23, 24);
-    for (i = 24; i < 31; ++i) link(b->nodes, i, i + 1);
-    link(b->nodes, 31, 0); /* long loop back */
+    for (i = 0; i < 7; ++i)  link_node(b->nodes, i, i + 1);
+    link_node(b->nodes, 7, 8);
+    for (i = 8; i < 15; ++i) link_node(b->nodes, i, i + 1);
+    link_node(b->nodes, 15, 16);
+    for (i = 16; i < 23; ++i) link_node(b->nodes, i, i + 1);
+    link_node(b->nodes, 23, 24);
+    for (i = 24; i < 31; ++i) link_node(b->nodes, i, i + 1);
+    link_node(b->nodes, 31, 0); /* long loop back */
 
     /* branches / shortcuts */
-    link(b->nodes, 3, 18);
-    link(b->nodes, 11, 27);
-    link(b->nodes, 20, 5);
-    link(b->nodes, 28, 12);
+    link_node(b->nodes, 3, 18);
+    link_node(b->nodes, 11, 27);
+    link_node(b->nodes, 20, 5);
+    link_node(b->nodes, 28, 12);
 
     /* space flavour */
     b->nodes[1].type  = SPACE_PLUS_COIN;

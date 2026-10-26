@@ -10,6 +10,7 @@
 #define BOARD_COUNT     2
 #define MAX_ITEMS       2
 #define MAX_FX          24
+#define MG_COUNT        3
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -36,7 +37,9 @@ typedef enum {
     STATE_LAND,
     STATE_SHOP,
     STATE_ROUND_END,
-    STATE_MINIGAME_SIM,
+    STATE_MG_INTRO,       /* transition card */
+    STATE_MG_PLAY,        /* active minigame */
+    STATE_MG_RESULT,      /* rankings + coin payout */
     STATE_RESULTS,
     STATE_EXIT
 } GameState;
@@ -55,6 +58,12 @@ typedef enum {
     ITEM_SHIELD
 } ItemType;
 
+typedef enum {
+    MG_MASH = 0,          /* mash Cross to fill meter */
+    MG_TIMING,            /* stop marker in green zone */
+    MG_REACTION           /* wait for GO, press Cross */
+} MiniGameType;
+
 typedef struct {
     int  id;
     bool is_human;
@@ -70,6 +79,9 @@ typedef struct {
     int  item_count;
     bool shielded;
     int  team;
+    /* minigame score this round (higher = better) */
+    int  mg_score;
+    int  mg_rank;         /* 0 = best */
 } Player;
 
 typedef struct {
@@ -135,6 +147,17 @@ typedef struct {
     int        boost_steps;
 
     FxSpark    fx[MAX_FX];
+
+    /* minigame runtime */
+    MiniGameType mg_type;
+    int          mg_timer;        /* frames remaining / elapsed */
+    float        mg_meter;        /* 0..1 mash fill or marker pos */
+    float        mg_marker;       /* timing marker 0..1 */
+    float        mg_marker_dir;   /* +1 / -1 */
+    int          mg_go_at;        /* reaction: frame when GO appears */
+    int          mg_pressed;      /* human already pressed */
+    int          mg_human_score;
+    bool         mg_awarded;
 } GameContext;
 
 void game_init(GameContext *g);

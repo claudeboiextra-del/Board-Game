@@ -14,7 +14,7 @@ INCLUDE		:= -I$(INCLUDES) -I$(PSL1GHT)/ppu/include -I$(PORTLIBS)/include
 CFLAGS		:= -O2 -Wall -mcpu=cell $(MACHDEP) $(INCLUDE)
 LDFLAGS		:= $(MACHDEP) -L$(PORTLIBS)/lib -ltiny3d -lrsx -lgcm_sys -lio -lsysutil -laudio -lrt -llv2 -lm -lsysmodule -lc
 
-GAME_PARTS := $(SOURCES)/game_part_0.c $(SOURCES)/game_part_1.c $(SOURCES)/game_part_2.c $(SOURCES)/game_part_3.c
+GAME_PARTS := $(SOURCES)/game_part_0.c $(SOURCES)/game_part_1.c $(SOURCES)/game_part_2.c $(SOURCES)/game_part_3.c $(SOURCES)/game_part_4.c
 
 $(SOURCES)/game.c: $(GAME_PARTS)
 	cat $(GAME_PARTS) > $@

@@ -1,6 +1,7 @@
 /*
  * Board Game – PS3 homebrew
- * Multi DualShock: player i → port i; edges + held for minigames
+ * PSL1GHT + Tiny3D, multi DualShock 3 (player i → pad i)
+ * Passes both edge (pressed) and level (held) for proper MG triggers
  */
 
 #include <stdio.h>
@@ -29,9 +30,13 @@ static uint32_t prev_pad[PAD_COUNT];
 static void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
 {
     (void)param; (void)userdata;
-    if (status == SYSUTIL_EXIT_GAME) {
-        LOG_I("Sysutil exit requested");
-        running = 0;
+    switch (status) {
+        case SYSUTIL_EXIT_GAME:
+            LOG_I("Sysutil exit requested");
+            running = 0;
+            break;
+        default:
+            break;
     }
 }
 
@@ -46,6 +51,10 @@ static uint32_t read_pad_buttons(int port)
     if (paddata[port].BTN_SQUARE)   b |= 0x40;
     if (paddata[port].BTN_TRIANGLE) b |= 0x80;
     if (paddata[port].BTN_START)    b |= 0x100;
+    if (paddata[port].BTN_LEFT)     b |= 0x01;
+    if (paddata[port].BTN_RIGHT)    b |= 0x02;
+    if (paddata[port].BTN_UP)       b |= 0x04;
+    if (paddata[port].BTN_DOWN)     b |= 0x08;
     return b;
 }
 
@@ -54,7 +63,7 @@ int main(int argc, char *argv[])
     (void)argc; (void)argv;
 
     logger_init();
-    LOG_I("Board Game boot – multi-pad edges+held");
+    LOG_I("Board Game boot – multi-pad + held for MGs");
 
     sysUtilRegisterCallback(0, sysutil_callback, NULL);
 
@@ -63,14 +72,17 @@ int main(int argc, char *argv[])
         logger_shutdown();
         return -1;
     }
+    LOG_I("Tiny3D initialised");
 
     ioPadInit(7);
+    LOG_I("Pad system ready (player i → port i)");
 
     if (sfx_init() != 0)
         LOG_W("Running without SFX");
 
     GameContext game;
     game_init(&game);
+
     memset(prev_pad, 0, sizeof(prev_pad));
 
     while (running) {
@@ -91,8 +103,10 @@ int main(int argc, char *argv[])
         sfx_update();
         game_render(&game);
 
-        if (game.state == STATE_EXIT)
+        if (game.state == STATE_EXIT) {
+            LOG_I("Game requested exit");
             running = 0;
+        }
 
         usleep(16000);
     }
@@ -102,5 +116,6 @@ int main(int argc, char *argv[])
     ioPadEnd();
     tiny3d_Exit();
     logger_shutdown();
+
     return 0;
 }

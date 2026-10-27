@@ -21,8 +21,8 @@ typedef enum {
     SPACE_STAR,
     SPACE_HIDDEN_COIN,
     SPACE_HIDDEN_STAR,
-    SPACE_WARP,       /* teleport to random node */
-    SPACE_HAZARD      /* risk: lose coins or get a small prize */
+    SPACE_WARP,
+    SPACE_HAZARD
 } SpaceType;
 
 typedef enum {
@@ -43,6 +43,7 @@ typedef enum {
     STATE_MG_PLAY,
     STATE_MG_RESULT,
     STATE_RESULTS,
+    STATE_PAUSE,
     STATE_EXIT
 } GameState;
 
@@ -58,18 +59,21 @@ typedef enum {
     ITEM_BOOST,
     ITEM_STEAL,
     ITEM_SHIELD,
-    ITEM_SWAP         /* swap board position with a rival */
+    ITEM_SWAP
 } ItemType;
 
 typedef enum {
-    MG_MASH = 0,      /* mash Cross – fill meter */
-    MG_TIMING,        /* stop marker in green */
-    MG_REACTION,      /* wait for GO then Cross */
-    MG_HOLD,          /* hold Cross, release in window */
-    MG_COUNT,         /* count flashes, Circle to submit */
-    MG_AVOID,         /* DON'T press while red; press on green */
-    MG_ZONE           /* keep marker inside sliding safe zone */
+    MG_MASH = 0,
+    MG_TIMING,
+    MG_REACTION,
+    MG_HOLD,
+    MG_COUNT,
+    MG_AVOID,
+    MG_ZONE
 } MiniGameType;
+
+/* setup rows: 0=players 1=humans 2=team 3=diff 4=rounds */
+#define SETUP_ROWS 5
 
 typedef struct {
     int  id;
@@ -126,10 +130,12 @@ typedef struct {
 
 typedef struct {
     GameState  state;
+    GameState  pause_from;   /* resume target */
     int        board_idx;
     Board     *board;
     Player     players[MAX_PLAYERS];
     int        player_count;
+    int        human_count;  /* 1..player_count */
     int        current_player;
     int        round;
     int        max_rounds;
@@ -152,6 +158,8 @@ typedef struct {
     bool       double_dice;
     int        item_cursor;
     int        boost_steps;
+    int        setup_cursor;
+    CpuDiff    cpu_diff;
 
     FxSpark    fx[MAX_FX];
 
@@ -169,9 +177,9 @@ typedef struct {
     int          mg_flash_count;
     int          mg_next_flash;
     int          mg_phase;
-    float        mg_zone_c;      /* zone center 0..1 for MG_ZONE */
-    float        mg_zone_w;      /* zone half-width */
-    int          mg_zone_hits;   /* frames inside zone */
+    float        mg_zone_c;
+    float        mg_zone_w;
+    int          mg_zone_hits;
 } GameContext;
 
 void game_init(GameContext *g);

@@ -25,24 +25,25 @@ typedef enum {
 /* -------- Music tracks (procedural loops) -------- */
 typedef enum {
     MUSIC_NONE = 0,
-    MUSIC_MENU,
-    MUSIC_BOARD_VISUAL,
-    MUSIC_BOARD_GEO,
-    MUSIC_BOARD_METRO,
-    MUSIC_MG_MASH,
-    MUSIC_MG_TIMING,
-    MUSIC_MG_REACT,
-    MUSIC_MG_RHYTHM,
-    MUSIC_RESULTS,
+    MUSIC_MENU,           /* title / setup / board select */
+    MUSIC_BOARD_VISUAL,   /* bright party board */
+    MUSIC_BOARD_GEO,      /* earthy adventure board */
+    MUSIC_BOARD_METRO,    /* urban electronic board */
+    MUSIC_MG_MASH,        /* mash / hold / hopper - driving pulse */
+    MUSIC_MG_TIMING,      /* timing / zone / catch - tense arcade */
+    MUSIC_MG_REACT,       /* reaction / avoid - urgent stingers */
+    MUSIC_MG_RHYTHM,      /* rhythm / simon / count - beat memory */
+    MUSIC_RESULTS,        /* end-of-match fanfare bed */
     MUSIC_COUNT
 } MusicId;
 
 int  sfx_init(void);
 void sfx_shutdown(void);
-void sfx_update(void);
 void sfx_play(SfxId id);
+void sfx_update(void);
 
 void music_set(MusicId id);
 MusicId music_current(void);
+void music_stop(void);
 
 #endif /* AUDIO_SFX_H */

@@ -7,10 +7,10 @@
 #define MAX_PLAYERS     4
 #define MAX_NODES       64
 #define MAX_ROUNDS_OPTS 4
-#define BOARD_COUNT     2
+#define BOARD_COUNT     3
 #define MAX_ITEMS       2
 #define MAX_FX          32
-#define MG_TYPE_COUNT   7
+#define MG_TYPE_COUNT   9
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -69,10 +69,11 @@ typedef enum {
     MG_HOLD,
     MG_COUNT,
     MG_AVOID,
-    MG_ZONE
+    MG_ZONE,
+    MG_RHYTHM,   /* press Cross on beat windows */
+    MG_CATCH     /* align under falling target, press to catch */
 } MiniGameType;
 
-/* setup rows: 0=players 1=humans 2=team 3=diff 4=rounds */
 #define SETUP_ROWS 5
 
 typedef struct {
@@ -130,12 +131,12 @@ typedef struct {
 
 typedef struct {
     GameState  state;
-    GameState  pause_from;   /* resume target */
+    GameState  pause_from;
     int        board_idx;
     Board     *board;
     Player     players[MAX_PLAYERS];
     int        player_count;
-    int        human_count;  /* 1..player_count */
+    int        human_count;
     int        current_player;
     int        round;
     int        max_rounds;
@@ -180,6 +181,11 @@ typedef struct {
     float        mg_zone_c;
     float        mg_zone_w;
     int          mg_zone_hits;
+    /* rhythm / catch */
+    int          mg_beats_hit;
+    int          mg_beats_total;
+    float        mg_fall_y;
+    float        mg_fall_x;
 } GameContext;
 
 void game_init(GameContext *g);
@@ -189,5 +195,6 @@ void game_shutdown(GameContext *g);
 
 void board_load_visual(Board *b);
 void board_load_geo(Board *b);
+void board_load_metro(Board *b);
 
 #endif /* GAME_H */

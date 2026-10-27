@@ -64,17 +64,17 @@ typedef enum {
 } ItemType;
 
 typedef enum {
-    MG_MASH = 0,      /* simultaneous FFA mash */
-    MG_TIMING,        /* sequential skill */
+    MG_MASH = 0,
+    MG_TIMING,
     MG_REACTION,
     MG_HOLD,
     MG_COUNT,
     MG_AVOID,
-    MG_ZONE,          /* simultaneous */
-    MG_RHYTHM,        /* simultaneous on shared beats */
-    MG_CATCH,         /* sequential / per-player */
-    MG_SIMON,         /* Shy Guy Says-style match button */
-    MG_HOPPER         /* Hot-Hot-Hop-style safe-floor hops */
+    MG_ZONE,
+    MG_RHYTHM,
+    MG_CATCH,
+    MG_SIMON,
+    MG_HOPPER
 } MiniGameType;
 
 #define SETUP_ROWS 5
@@ -190,15 +190,14 @@ typedef struct {
     float        mg_fall_y;
     float        mg_fall_x;
     int          mg_actor;
-    bool         mg_simul;              /* all humans play at once */
-    float        mg_p_meter[MAX_PLAYERS]; /* live meters for simul */
-    int          mg_p_latched[MAX_PLAYERS]; /* edge latch per player */
-    int          mg_prompt;               /* SIMON expected button mask */
-    int          mg_safe;                 /* HOPPER floor safe flag */
+    bool         mg_simul;
+    float        mg_p_meter[MAX_PLAYERS];
+    int          mg_p_latched[MAX_PLAYERS];
+    uint32_t     mg_prompt;
+    int          mg_safe;
 } GameContext;
 
 void game_init(GameContext *g);
-/* pressed = edges, held = continuous state – both per controller port */
 void game_update(GameContext *g, const uint32_t pad_pressed[PAD_COUNT],
                  const uint32_t pad_held[PAD_COUNT]);
 void game_render(GameContext *g);

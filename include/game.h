@@ -11,7 +11,7 @@
 #define BOARD_COUNT     3
 #define MAX_ITEMS       2
 #define MAX_FX          32
-#define MG_TYPE_COUNT   9
+#define MG_TYPE_COUNT   11
 
 typedef enum {
     SPACE_NORMAL = 0,
@@ -64,15 +64,17 @@ typedef enum {
 } ItemType;
 
 typedef enum {
-    MG_MASH = 0,
-    MG_TIMING,
+    MG_MASH = 0,      /* simultaneous FFA mash */
+    MG_TIMING,        /* sequential skill */
     MG_REACTION,
     MG_HOLD,
     MG_COUNT,
     MG_AVOID,
-    MG_ZONE,
-    MG_RHYTHM,
-    MG_CATCH
+    MG_ZONE,          /* simultaneous */
+    MG_RHYTHM,        /* simultaneous on shared beats */
+    MG_CATCH,         /* sequential / per-player */
+    MG_SIMON,         /* Shy Guy Says-style match button */
+    MG_HOPPER         /* Hot-Hot-Hop-style safe-floor hops */
 } MiniGameType;
 
 #define SETUP_ROWS 5
@@ -95,7 +97,7 @@ typedef struct {
     int  team;
     int  mg_score;
     int  mg_rank;
-    int  pad_id;   /* controller port 0..PAD_COUNT-1 */
+    int  pad_id;
 } Player;
 
 typedef struct {
@@ -187,12 +189,18 @@ typedef struct {
     int          mg_beats_total;
     float        mg_fall_y;
     float        mg_fall_x;
-    int          mg_actor;   /* player currently playing minigame */
+    int          mg_actor;
+    bool         mg_simul;              /* all humans play at once */
+    float        mg_p_meter[MAX_PLAYERS]; /* live meters for simul */
+    int          mg_p_latched[MAX_PLAYERS]; /* edge latch per player */
+    int          mg_prompt;               /* SIMON expected button mask */
+    int          mg_safe;                 /* HOPPER floor safe flag */
 } GameContext;
 
 void game_init(GameContext *g);
-/* pad_pressed[i] = edge-triggered buttons for controller port i */
-void game_update(GameContext *g, const uint32_t pad_pressed[PAD_COUNT]);
+/* pressed = edges, held = continuous state – both per controller port */
+void game_update(GameContext *g, const uint32_t pad_pressed[PAD_COUNT],
+                 const uint32_t pad_held[PAD_COUNT]);
 void game_render(GameContext *g);
 void game_shutdown(GameContext *g);
 

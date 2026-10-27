@@ -1,6 +1,6 @@
 /*
  * Board Game – PS3 homebrew
- * PSL1GHT + Tiny3D, multi DualShock 3 (player i → pad i)
+ * Multi DualShock: player i → port i; edges + held for minigames
  */
 
 #include <stdio.h>
@@ -29,13 +29,9 @@ static uint32_t prev_pad[PAD_COUNT];
 static void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
 {
     (void)param; (void)userdata;
-    switch (status) {
-        case SYSUTIL_EXIT_GAME:
-            LOG_I("Sysutil exit requested");
-            running = 0;
-            break;
-        default:
-            break;
+    if (status == SYSUTIL_EXIT_GAME) {
+        LOG_I("Sysutil exit requested");
+        running = 0;
     }
 }
 
@@ -58,7 +54,7 @@ int main(int argc, char *argv[])
     (void)argc; (void)argv;
 
     logger_init();
-    LOG_I("Board Game boot – PSL1GHT / Tiny3D (multi-pad)");
+    LOG_I("Board Game boot – multi-pad edges+held");
 
     sysUtilRegisterCallback(0, sysutil_callback, NULL);
 
@@ -67,17 +63,14 @@ int main(int argc, char *argv[])
         logger_shutdown();
         return -1;
     }
-    LOG_I("Tiny3D initialised");
 
     ioPadInit(7);
-    LOG_I("Pad system ready (player i uses controller port i)");
 
     if (sfx_init() != 0)
         LOG_W("Running without SFX");
 
     GameContext game;
     game_init(&game);
-
     memset(prev_pad, 0, sizeof(prev_pad));
 
     while (running) {
@@ -94,14 +87,12 @@ int main(int argc, char *argv[])
             prev_pad[i] = held[i];
         }
 
-        game_update(&game, pressed);
+        game_update(&game, pressed, held);
         sfx_update();
         game_render(&game);
 
-        if (game.state == STATE_EXIT) {
-            LOG_I("Game requested exit");
+        if (game.state == STATE_EXIT)
             running = 0;
-        }
 
         usleep(16000);
     }
@@ -111,6 +102,5 @@ int main(int argc, char *argv[])
     ioPadEnd();
     tiny3d_Exit();
     logger_shutdown();
-
     return 0;
 }

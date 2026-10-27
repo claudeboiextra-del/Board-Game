@@ -1,6 +1,6 @@
 /*
  * Board Game – PS3 homebrew
- * PSL1GHT + Tiny3D, DualShock 3, dual logging, synth SFX
+ * PSL1GHT + Tiny3D, multi DualShock 3 (player i → pad i)
  */
 
 #include <stdio.h>
@@ -24,6 +24,7 @@
 static int running = 1;
 static padInfo padinfo;
 static padData paddata[MAX_PADS];
+static uint32_t prev_pad[PAD_COUNT];
 
 static void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
 {
@@ -38,12 +39,26 @@ static void sysutil_callback(uint64_t status, uint64_t param, void *userdata)
     }
 }
 
+static uint32_t read_pad_buttons(int port)
+{
+    uint32_t b = 0;
+    if (port < 0 || port >= MAX_PADS) return 0;
+    if (!padinfo.status[port]) return 0;
+    ioPadGetData(port, &paddata[port]);
+    if (paddata[port].BTN_CROSS)    b |= 0x10;
+    if (paddata[port].BTN_CIRCLE)   b |= 0x20;
+    if (paddata[port].BTN_SQUARE)   b |= 0x40;
+    if (paddata[port].BTN_TRIANGLE) b |= 0x80;
+    if (paddata[port].BTN_START)    b |= 0x100;
+    return b;
+}
+
 int main(int argc, char *argv[])
 {
     (void)argc; (void)argv;
 
     logger_init();
-    LOG_I("Board Game boot – PSL1GHT / Tiny3D");
+    LOG_I("Board Game boot – PSL1GHT / Tiny3D (multi-pad)");
 
     sysUtilRegisterCallback(0, sysutil_callback, NULL);
 
@@ -55,7 +70,7 @@ int main(int argc, char *argv[])
     LOG_I("Tiny3D initialised");
 
     ioPadInit(7);
-    LOG_I("Pad system ready");
+    LOG_I("Pad system ready (player i uses controller port i)");
 
     if (sfx_init() != 0)
         LOG_W("Running without SFX");
@@ -63,27 +78,21 @@ int main(int argc, char *argv[])
     GameContext game;
     game_init(&game);
 
-    uint32_t prev_buttons = 0;
+    memset(prev_pad, 0, sizeof(prev_pad));
 
     while (running) {
-        sysUtilCheckCallback();
-
-        ioPadGetInfo(&padinfo);
-        uint32_t buttons = 0;
         int i;
-        for (i = 0; i < MAX_PADS; ++i) {
-            if (padinfo.status[i]) {
-                ioPadGetData(i, &paddata[i]);
-                if (paddata[i].BTN_CROSS)    buttons |= 0x10;
-                if (paddata[i].BTN_CIRCLE)   buttons |= 0x20;
-                if (paddata[i].BTN_SQUARE)   buttons |= 0x40;
-                if (paddata[i].BTN_TRIANGLE) buttons |= 0x80;
-                if (paddata[i].BTN_START)    buttons |= 0x100;
-            }
-        }
+        uint32_t held[PAD_COUNT];
+        uint32_t pressed[PAD_COUNT];
 
-        uint32_t pressed = buttons & ~prev_buttons;
-        prev_buttons = buttons;
+        sysUtilCheckCallback();
+        ioPadGetInfo(&padinfo);
+
+        for (i = 0; i < PAD_COUNT; ++i) {
+            held[i] = read_pad_buttons(i);
+            pressed[i] = held[i] & ~prev_pad[i];
+            prev_pad[i] = held[i];
+        }
 
         game_update(&game, pressed);
         sfx_update();

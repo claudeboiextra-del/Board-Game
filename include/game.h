@@ -5,6 +5,7 @@
 #include <stdbool.h>
 
 #define MAX_PLAYERS     4
+#define PAD_COUNT       4
 #define MAX_NODES       64
 #define MAX_ROUNDS_OPTS 4
 #define BOARD_COUNT     3
@@ -70,8 +71,8 @@ typedef enum {
     MG_COUNT,
     MG_AVOID,
     MG_ZONE,
-    MG_RHYTHM,   /* press Cross on beat windows */
-    MG_CATCH     /* align under falling target, press to catch */
+    MG_RHYTHM,
+    MG_CATCH
 } MiniGameType;
 
 #define SETUP_ROWS 5
@@ -94,6 +95,7 @@ typedef struct {
     int  team;
     int  mg_score;
     int  mg_rank;
+    int  pad_id;   /* controller port 0..PAD_COUNT-1 */
 } Player;
 
 typedef struct {
@@ -181,15 +183,16 @@ typedef struct {
     float        mg_zone_c;
     float        mg_zone_w;
     int          mg_zone_hits;
-    /* rhythm / catch */
     int          mg_beats_hit;
     int          mg_beats_total;
     float        mg_fall_y;
     float        mg_fall_x;
+    int          mg_actor;   /* player currently playing minigame */
 } GameContext;
 
 void game_init(GameContext *g);
-void game_update(GameContext *g, uint32_t pad_buttons);
+/* pad_pressed[i] = edge-triggered buttons for controller port i */
+void game_update(GameContext *g, const uint32_t pad_pressed[PAD_COUNT]);
 void game_render(GameContext *g);
 void game_shutdown(GameContext *g);
 

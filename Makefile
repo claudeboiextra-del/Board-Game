@@ -19,13 +19,19 @@ CFLAGS		:= -O2 -Wall -mcpu=cell $(MACHDEP) $(INCLUDE)
 CXXFLAGS	:= $(CFLAGS)
 LDFLAGS		:= $(MACHDEP) -L$(PORTLIBS)/lib -ltiny3d -lrsx -lgcm_sys -lio -lsysutil -laudio -lrt -llv2 -lm -lsysmodule -lc
 
+# Expand compressed game.c when z64 is present (sound overhaul)
+ifneq ($(wildcard $(SOURCES)/game.c.z64),)
+$(SOURCES)/game.c: $(SOURCES)/game.c.z64
+	python3 -c "import zlib,base64; open('$@','wb').write(zlib.decompress(base64.b64decode(open('$<').read())))"
+endif
+
 CFILES		:= $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:= $(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 OFILES		:= $(addprefix $(BUILD)/,$(CFILES:.c=.o) $(CPPFILES:.cpp=.o))
 
 .PHONY: all clean install
 
-all: $(BUILD)/$(TARGET).elf
+all: $(SOURCES)/game.c $(BUILD)/$(TARGET).elf
 
 $(BUILD):
 	@mkdir -p $@

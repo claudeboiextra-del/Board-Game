@@ -1,4 +1,4 @@
-/* Board Game – Jamboree pacing, 9 minigames, 3 boards, menus */
+/* Board Game – multi-pad (player i → port i), 9 MGs, 3 boards */
 #include "game.h"
 #include "logger.h"
 #include "audio_sfx.h"
@@ -112,9 +112,13 @@ static void mg_begin(GameContext *g) {
         g->mg_target = g->mg_go_at + 35 + rand_range(0, 25);
     }
     for (i = 0; i < g->player_count; ++i) { g->players[i].mg_score = 0; g->players[i].mg_rank = i; }
+    g->mg_actor = 0;
+    for (i = 0; i < g->player_count; ++i) {
+        if (g->players[i].is_human) { g->mg_actor = i; break; }
+    }
     g->state = STATE_MG_INTRO; g->state_timer = 0;
     sfx_play(SFX_CLICK);
-    LOG_I("Minigame type %d", (int)g->mg_type);
+    LOG_I("Minigame type %d actor P%d", (int)g->mg_type, g->mg_actor + 1);
 }
 static int cpu_mg_score(Player *p, MiniGameType t) {
     int base = 55, noise = rand_range(-15, 15);
@@ -143,13 +147,48 @@ static void mg_rank_and_pay(GameContext *g) {
     spawn_fx(g, 424, 200, 0xFFF1C40F, 12);
     sfx_play(SFX_WIN);
 }
+static void mg_reset_play_vars(GameContext *g) {
+    g->mg_timer = 0; g->mg_meter = 0; g->mg_marker = 0.12f; g->mg_marker_dir = 1;
+    g->mg_pressed = 0; g->mg_human_score = 0; g->mg_hold_frames = 0;
+    g->mg_zone_hits = 0; g->mg_flash_count = 0; g->mg_phase = 0;
+    g->mg_beats_hit = 0; g->mg_fall_y = 0.f;
+    g->mg_go_at = 30 + rand_range(0, 40);
+    if (g->mg_type == MG_RHYTHM) {
+        g->mg_beats_total = 6; g->mg_next_flash = 20; g->mg_target = 18;
+    }
+    if (g->mg_type == MG_CATCH) {
+        g->mg_fall_x = 0.3f + (float)rand_range(0, 40) * 0.01f;
+        g->mg_marker = 0.5f; g->mg_beats_total = 4;
+    }
+    if (g->mg_type == MG_COUNT) {
+        g->mg_target = 3 + rand_range(0, 3); g->mg_next_flash = 16;
+    }
+    if (g->mg_type == MG_AVOID) {
+        g->mg_go_at = 25 + rand_range(0, 35);
+        g->mg_target = g->mg_go_at + 35 + rand_range(0, 25);
+    }
+}
 static void mg_finish_play(GameContext *g) {
-    int i;
+    int i, next = -1;
+    if (g->mg_actor >= 0 && g->mg_actor < g->player_count &&
+        g->players[g->mg_actor].is_human) {
+        g->players[g->mg_actor].mg_score = g->mg_human_score;
+    }
+    for (i = g->mg_actor + 1; i < g->player_count; ++i) {
+        if (g->players[i].is_human) { next = i; break; }
+    }
+    if (next >= 0) {
+        g->mg_actor = next;
+        mg_reset_play_vars(g);
+        g->state = STATE_MG_INTRO;
+        g->state_timer = 0;
+        sfx_play(SFX_CLICK);
+        LOG_I("Minigame next human P%d", next + 1);
+        return;
+    }
     for (i = 0; i < g->player_count; ++i) {
         if (!g->players[i].is_human)
             g->players[i].mg_score = cpu_mg_score(&g->players[i], g->mg_type);
-        else
-            g->players[i].mg_score = g->mg_human_score;
     }
     g->state = STATE_MG_RESULT; g->state_timer = 0;
 }
@@ -165,6 +204,7 @@ void game_init(GameContext *g) {
         g->players[i].id = i; g->players[i].is_human = (i == 0);
         g->players[i].diff = DIFF_NORMAL; g->players[i].coins = 12;
         g->players[i].node = g->board->start_node; g->players[i].color = i;
+        g->players[i].pad_id = i;
         g->players[i].team = (i < 2) ? 0 : 1; g->players[i].shadow_s = 1.0f;
         node_world(g, g->players[i].node, &x, &y);
         g->players[i].disp_x = x; g->players[i].disp_y = y; g->players[i].hop_t = 1.0f;
@@ -375,20 +415,47 @@ static void update_display_positions(GameContext *g) {
     if (g->popup.active) { g->popup.life -= 0.02f; g->popup.y -= 0.9f; if (g->popup.life <= 0) g->popup.active = 0; }
     update_fx(g);
 }
-void game_update(GameContext *g, uint32_t buttons) {
+static uint32_t buttons_any(const uint32_t pad_pressed[PAD_COUNT]) {
+    int i; uint32_t b = 0;
+    for (i = 0; i < PAD_COUNT; ++i) b |= pad_pressed[i];
+    return b;
+}
+static uint32_t buttons_for_player(GameContext *g, int pid, const uint32_t pad_pressed[PAD_COUNT]) {
+    int port;
+    if (pid < 0 || pid >= g->player_count) return 0;
+    if (!g->players[pid].is_human) return 0;
+    port = g->players[pid].pad_id;
+    if (port < 0 || port >= PAD_COUNT) port = pid % PAD_COUNT;
+    return pad_pressed[port];
+}
+void game_update(GameContext *g, const uint32_t pad_pressed[PAD_COUNT]) {
     Player *p = &g->players[g->current_player]; BoardNode *n;
+    uint32_t buttons;
     g->frame++; g->anim_t += 0.016f; g->state_timer++;
     if (g->hop_cooldown > 0) g->hop_cooldown--;
     if (g->land_flash > 0) g->land_flash--;
     update_display_positions(g);
 
-    if ((buttons & 0x100) && g->state != STATE_TITLE && g->state != STATE_SETUP
-        && g->state != STATE_BOARD_SELECT && g->state != STATE_RESULTS && g->state != STATE_EXIT) {
-        if (g->state == STATE_PAUSE) {
-            g->state = g->pause_from; sfx_play(SFX_CLICK); buttons = 0;
-        } else if (g->state >= STATE_TURN_START && g->state <= STATE_MG_RESULT) {
-            g->pause_from = g->state; g->state = STATE_PAUSE; sfx_play(SFX_CLICK); buttons = 0;
+    {
+        uint32_t any = buttons_any(pad_pressed);
+        if ((any & 0x100) && g->state != STATE_TITLE && g->state != STATE_SETUP
+            && g->state != STATE_BOARD_SELECT && g->state != STATE_RESULTS && g->state != STATE_EXIT) {
+            if (g->state == STATE_PAUSE) {
+                g->state = g->pause_from; sfx_play(SFX_CLICK);
+            } else if (g->state >= STATE_TURN_START && g->state <= STATE_MG_RESULT) {
+                g->pause_from = g->state; g->state = STATE_PAUSE; sfx_play(SFX_CLICK);
+            }
         }
+    }
+
+    if (g->state == STATE_TITLE || g->state == STATE_SETUP || g->state == STATE_BOARD_SELECT
+        || g->state == STATE_RESULTS || g->state == STATE_PAUSE || g->state == STATE_MG_RESULT
+        || g->state == STATE_MG_INTRO || g->state == STATE_ROUND_END) {
+        buttons = buttons_any(pad_pressed);
+    } else if (g->state == STATE_MG_PLAY) {
+        buttons = buttons_for_player(g, g->mg_actor, pad_pressed);
+    } else {
+        buttons = buttons_for_player(g, g->current_player, pad_pressed);
     }
 
     switch (g->state) {
@@ -433,6 +500,7 @@ void game_update(GameContext *g, uint32_t buttons) {
                 g->players[i].node = g->board->start_node; g->players[i].item_count = 0;
                 g->players[i].shielded = false; g->players[i].shadow_s = 1.0f;
                 g->players[i].color = i;
+                g->players[i].pad_id = i;
                 if (g->team_mode && g->player_count == 4)
                     g->players[i].team = (i < 2) ? 0 : 1;
                 else

@@ -1,1 +1,161 @@
-PLACEHOLDER
+name: Build Board Game PS3
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  PS3DEV: ${{ github.workspace }}/ps3dev
+  PSL1GHT: ${{ github.workspace }}/ps3dev
+  APPID: BRDG00001
+  CONTENTID: UP0001-BRDG00001_00-0000000000000000
+  TITLE: Board Game
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Host Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake bison flex gcc libelf-dev make \
+            texinfo libncurses5-dev patch python3 python-is-python3 subversion wget \
+            zlib1g-dev libtool-bin python3-dev bzip2 libgmp3-dev pkg-config git g++ libssl-dev clang
+
+      - name: Configure download retries and helpers
+        run: |
+          printf 'tries = 5\nretry_connrefused = on\nwaitretry = 10\ntimeout = 60\n' >> ~/.wgetrc
+          printf 'retry = 5\nretry-delay = 10\nretry-all-errors\nconnect-timeout = 30\n' >> ~/.curlrc
+          mkdir -p "${{ github.workspace }}/logs"
+
+      - name: Restore core toolchain cache
+        id: cache_core
+        uses: actions/cache/restore@v4
+        with:
+          path: ps3dev
+          key: ps3dev-core-boardgame-v1
+
+      - name: Get ps3toolchain
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$PS3DEV"
+          git clone --depth=1 https://github.com/ps3dev/ps3toolchain.git ps3toolchain-src
+
+      - name: Stage A - build core toolchain (GCC, binutils, PSL1GHT)
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          cd ps3toolchain-src
+          mkdir -p /tmp/hold
+          mv scripts/*ps3libraries*.sh /tmp/hold/ || true
+          ./toolchain.sh > "${{ github.workspace }}/logs/stage-a.log" 2>&1 \
+            || { tail -n 150 "${{ github.workspace }}/logs/stage-a.log"; exit 1; }
+          mv /tmp/hold/*.sh scripts/ || true
+
+      - name: Build PSL1GHT SDK (only if the toolchain did not include it)
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        run: |
+          set -ex
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          if [ ! -x "$PS3DEV/bin/sprxlinker" ]; then
+            git clone --depth=1 https://github.com/ps3dev/PSL1GHT.git psl1ght-src
+            cd psl1ght-src
+            make install-ctrl
+            make install
+          fi
+
+      - name: Save core toolchain cache
+        if: steps.cache_core.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ps3dev
+          key: ps3dev-core-boardgame-v1
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-logs
+          path: logs/
+          if-no-files-found: ignore
+
+      - name: Check toolchain
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          which powerpc64-ps3-elf-gcc powerpc64-ps3-elf-g++ sprxlinker make_self_npdrm || { echo "TOOLCHAIN MISSING"; exit 1; }
+
+      - name: Build / install Tiny3D
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          if [ ! -f "$PS3DEV/portlibs/ppu/lib/libtiny3d.a" ]; then
+            git clone --depth=1 https://github.com/wargio/tiny3d.git tiny3d-src
+            make -C tiny3d-src/lib clean || true
+            make -C tiny3d-src/lib
+            make -C tiny3d-src/lib install
+          fi
+
+      - name: Build ELF
+        run: |
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          export PS3DEV PSL1GHT
+          make clean || true
+          make
+
+      # strip → sprxlinker → make_self_npdrm → sfo → pkg → package_finalize
+      - name: Create SELF and PKG
+        run: |
+          set -ex
+          export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          export PS3DEV PSL1GHT
+          ELF=build/boardgame.elf
+          test -f "$ELF"
+
+          # Icon
+          if [ ! -f ICON0.PNG ]; then
+            python3 tools/make_icon.py ICON0.PNG
+          fi
+
+          mkdir -p build/pkg/USRDIR
+
+          # Strip + link + SELF
+          cp "$ELF" build/boardgame.strip.elf
+          powerpc64-ps3-elf-strip -s build/boardgame.strip.elf || true
+          sprxlinker build/boardgame.strip.elf
+          make_self_npdrm build/boardgame.strip.elf build/pkg/USRDIR/EBOOT.BIN "$CONTENTID"
+          test -f build/pkg/USRDIR/EBOOT.BIN
+
+          cp ICON0.PNG build/pkg/ICON0.PNG
+
+          # PARAM.SFO — fail hard if sfo fails (no || true)
+          SFO=$(command -v sfo || command -v sfo.py)
+          PKG=$(command -v pkg || command -v pkg.py)
+          test -n "$SFO" && test -n "$PKG"
+
+          "$SFO" --title "$TITLE" --appid "$APPID" -f sfo.xml build/pkg/PARAM.SFO
+          test -f build/pkg/PARAM.SFO
+
+          # Build PKG then finalize (required for installable .gnpdrm.pkg on CFW/HEN)
+          "$PKG" --contentid "$CONTENTID" build/pkg build/boardgame.pkg
+          test -f build/boardgame.pkg
+
+          cp build/boardgame.pkg build/boardgame.gnpdrm.pkg
+          if command -v package_finalize >/dev/null 2>&1; then
+            package_finalize build/boardgame.gnpdrm.pkg
+          fi
+
+          ls -la build/boardgame.pkg build/boardgame.gnpdrm.pkg build/pkg/USRDIR/EBOOT.BIN build/pkg/PARAM.SFO build/pkg/ICON0.PNG
+
+      - name: Upload PS3 Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: boardgame-pkg
+          path: |
+            build/boardgame.gnpdrm.pkg
+            build/boardgame.pkg

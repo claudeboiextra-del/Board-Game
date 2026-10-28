@@ -25,11 +25,15 @@ all: $(BUILD)/$(TARGET).elf
 $(BUILD):
 	@mkdir -p $@
 
+# Compiler/linker output is echoed as usual; on failure the first errors are also
+# emitted as GitHub Actions ::error:: annotations so they show up on the check run.
 $(BUILD)/%.o: $(SOURCES)/%.c $(HEADERS) | $(BUILD)
-	$(CC) $(CFLAGS) -c $< -o $@
+	@echo "CC $<"; $(CC) $(CFLAGS) -c $< -o $@ > $@.log 2>&1; rc=$$?; cat $@.log; \
+	if [ $$rc -ne 0 ]; then grep -E "error|No such file" $@.log | head -20 | sed 's/^/::error::/'; fi; exit $$rc
 
 $(BUILD)/$(TARGET).elf: $(OFILES)
-	$(CC) $(OFILES) $(LDFLAGS) -o $@
+	@echo "LD $@"; $(CC) $(OFILES) $(LDFLAGS) -o $@ > $@.log 2>&1; rc=$$?; cat $@.log; \
+	if [ $$rc -ne 0 ]; then grep -E "error|undefined reference|cannot find" $@.log | head -20 | sed 's/^/::error::/'; fi; exit $$rc
 
 clean:
 	rm -rf $(BUILD)

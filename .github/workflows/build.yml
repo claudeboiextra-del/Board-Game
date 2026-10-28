@@ -94,6 +94,7 @@ jobs:
       - name: Build / install Tiny3D
         run: |
           export PATH="$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin"
+          mkdir -p "$PS3DEV/portlibs/ppu/include" "$PS3DEV/portlibs/ppu/lib"
           if [ ! -f "$PS3DEV/portlibs/ppu/lib/libtiny3d.a" ]; then
             git clone --depth=1 https://github.com/wargio/tiny3d.git tiny3d-src
             make -C tiny3d-src/lib clean || true

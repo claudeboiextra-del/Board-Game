@@ -118,6 +118,16 @@ static ItemType random_item(void) {
     static const ItemType pool[] = { ITEM_DOUBLE_DICE, ITEM_BOOST, ITEM_STEAL, ITEM_SHIELD, ITEM_SWAP, ITEM_BOOST };
     return pool[rand_range(0, 5)];
 }
+static int item_price(ItemType it) {
+    switch (it) {
+    case ITEM_DOUBLE_DICE: return 6;
+    case ITEM_BOOST: return 5;
+    case ITEM_STEAL: return 8;
+    case ITEM_SHIELD: return 6;
+    case ITEM_SWAP: return 7;
+    default: return 99;
+    }
+}
 static int find_last_place(GameContext *g) {
     int best = 0, i;
     for (i = 1; i < g->player_count; ++i) {
@@ -131,6 +141,14 @@ static int star_cost_for(GameContext *g, Player *p) {
     int last = find_last_place(g);
     if (p->id == last && g->player_count > 1) return 15;
     return 20;
+}
+static void shop_open(GameContext *g, Player *p) {
+    ItemType all[5] = { ITEM_DOUBLE_DICE, ITEM_BOOST, ITEM_STEAL, ITEM_SHIELD, ITEM_SWAP };
+    int i;
+    for (i = 4; i > 0; --i) { int j = rand_range(0, i); ItemType t = all[i]; all[i] = all[j]; all[j] = t; }
+    for (i = 0; i < 3; ++i) { g->shop_offer[i] = all[i]; g->shop_cost[i] = item_price(all[i]); }
+    g->shop_star_cost = star_cost_for(g, p);
+    g->item_cursor = 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -378,6 +396,7 @@ static int cpu_choose_path(GameContext *g, Player *p, int from) {
         if (t == SPACE_WARP) score += (p->diff == DIFF_HARD) ? -5 : 5;
         if (t == SPACE_HAZARD) score -= 12;
         if (t == SPACE_MINUS_COIN) score -= 15;
+        if (t == SPACE_BOWSER) score -= 22;
         if (p->diff == DIFF_HARD) score += rand_range(0, 5);
         else if (p->diff == DIFF_EASY) score += rand_range(-20, 20);
         else score += rand_range(-5, 8);
@@ -411,7 +430,7 @@ static void apply_land(GameContext *g, Player *p) {
         else if (rand_range(0, 1)) { p->coins += 6; spawn_popup(g, px, py, pz, 6, 4); sfx_play(SFX_COIN); }
         else { delta = (p->coins > 3) ? 3 : p->coins; p->coins -= delta; spawn_popup(g, px, py, pz, -delta, 4); sfx_play(SFX_FAIL); } break;
     case SPACE_SHOP:
-        spawn_popup(g, px, py, pz, 0, 3); g->state = STATE_SHOP; g->state_timer = 0; g->item_cursor = 0; return;
+        spawn_popup(g, px, py, pz, 0, 3); shop_open(g, p); g->state = STATE_SHOP; g->state_timer = 0; return;
     case SPACE_STAR:
         cost = star_cost_for(g, p);
         if (p->coins >= cost) { p->coins -= cost; p->stars += 1; spawn_popup(g, px, py, pz, 1, 1);
@@ -427,6 +446,31 @@ static void apply_land(GameContext *g, Player *p) {
         node_world(g, dest, &px, &pz);
         spawn_popup(g, px, py, pz, 0, 4); spawn_fx(g, px, 1, pz, 0xFF1ABC9C, 10); sfx_play(SFX_CLICK);
         break;
+    case SPACE_BOWSER: {
+        int ev = rand_range(0, 3);
+        spawn_fx(g, px, 1, pz, 0xFFE74C3C, 12); sfx_play(SFX_BUZZ);
+        if (p->shielded) { p->shielded = false; spawn_popup(g, px, py, pz, 0, 5); spawn_fx(g, px, 1, pz, 0xFF3498DB, 6); break; }
+        if (ev == 0) {
+            delta = (p->coins >= 10) ? 10 : p->coins; p->coins -= delta;
+            spawn_popup(g, px, py, pz, -delta, 8);
+        } else if (ev == 1) {
+            int k, others = g->player_count - 1, each = 3;
+            delta = 0;
+            for (k = 0; k < g->player_count; ++k) {
+                if (k == p->id) continue;
+                if (p->coins >= each) { p->coins -= each; g->players[k].coins += each; delta += each; }
+            }
+            (void)others; spawn_popup(g, px, py, pz, -delta, 8);
+        } else if (ev == 2) {
+            p->node = g->board->start_node; snap_player(g, p->id); p->hop_t = 0;
+            node_world(g, p->node, &px, &pz);
+            spawn_popup(g, px, py, pz, 0, 9); spawn_fx(g, px, 1, pz, 0xFFE74C3C, 10);
+        } else {
+            if (p->item_count > 0) { p->item_count = 0; spawn_popup(g, px, py, pz, 0, 10); }
+            else { delta = (p->coins >= 6) ? 6 : p->coins; p->coins -= delta; spawn_popup(g, px, py, pz, -delta, 8); }
+        }
+        sfx_play(SFX_FAIL);
+        break; }
     case SPACE_HAZARD:
         if (rand_range(0, 1) == 0) {
             delta = 2 + rand_range(0, 2);
@@ -438,25 +482,38 @@ static void apply_land(GameContext *g, Player *p) {
     default: break;
     }
 }
+static int buy_item(GameContext *g, Player *p, int slot) {
+    if (slot < 0 || slot > 2 || g->shop_offer[slot] == ITEM_NONE) return 0;
+    if (p->coins < g->shop_cost[slot] || p->item_count >= MAX_ITEMS) return 0;
+    p->coins -= g->shop_cost[slot]; give_item(p, g->shop_offer[slot]); g->shop_offer[slot] = ITEM_NONE;
+    sfx_play(SFX_COIN);
+    return 1;
+}
+static int buy_star(GameContext *g, Player *p) {
+    g->shop_star_cost = star_cost_for(g, p);
+    if (p->coins < g->shop_star_cost) return 0;
+    p->coins -= g->shop_star_cost; p->stars += 1; relocate_star(g); p->celebrating = true;
+    g->shop_star_cost = star_cost_for(g, p);
+    sfx_play(SFX_STAR);
+    return 1;
+}
+/* cursor: 0 = star, 1..3 = items, 4 = leave. Sets state to TURN_START when the visit ends. */
 static void do_shop(GameContext *g, Player *p, uint32_t buttons) {
-    int cost = star_cost_for(g, p);
     if (!p->is_human) {
+        int i, best = -1;
         if (g->state_timer < 14) return;
-        if (p->coins >= cost && (p->stars < 3 || p->diff == DIFF_HARD)) {
-            p->coins -= cost; p->stars += 1; relocate_star(g); sfx_play(SFX_STAR);
-        } else if (p->coins >= 8 && p->item_count < MAX_ITEMS) {
-            p->coins -= 8; give_item(p, random_item()); sfx_play(SFX_COIN);
-        }
+        if (p->coins >= g->shop_star_cost && (p->stars < 3 || p->diff == DIFF_HARD)) buy_star(g, p);
+        for (i = 0; i < 3; ++i)
+            if (g->shop_offer[i] != ITEM_NONE && p->coins >= g->shop_cost[i] && p->item_count < MAX_ITEMS &&
+                (best < 0 || rand_range(0, 1))) best = i;
+        if (best >= 0 && p->diff != DIFF_EASY) buy_item(g, p, best);
         g->state = STATE_TURN_START; return;
     }
-    if (buttons & 0x20) { g->item_cursor = (g->item_cursor + 1) % 3; sfx_play(SFX_CLICK); }
+    if (buttons & 0x20) { g->item_cursor = (g->item_cursor + 1) % 5; sfx_play(SFX_CLICK); }
     if (buttons & 0x10) {
-        if (g->item_cursor == 0 && p->coins >= cost) {
-            p->coins -= cost; p->stars += 1; relocate_star(g); p->celebrating = true; sfx_play(SFX_STAR);
-        } else if (g->item_cursor == 1 && p->coins >= 8 && p->item_count < MAX_ITEMS) {
-            p->coins -= 8; give_item(p, random_item()); sfx_play(SFX_COIN);
-        } else sfx_play(SFX_CLICK);
-        g->state = STATE_TURN_START;
+        if (g->item_cursor == 4) { sfx_play(SFX_CLICK); g->state = STATE_TURN_START; return; }
+        if (g->item_cursor == 0) { if (!buy_star(g, p)) sfx_play(SFX_FAIL); }
+        else if (!buy_item(g, p, g->item_cursor - 1)) sfx_play(SFX_FAIL);
     }
 }
 static void use_item(GameContext *g, Player *p, int slot) {

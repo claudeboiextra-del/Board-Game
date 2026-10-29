@@ -23,7 +23,8 @@ typedef enum {
     SPACE_HIDDEN_COIN,
     SPACE_HIDDEN_STAR,
     SPACE_WARP,
-    SPACE_HAZARD
+    SPACE_HAZARD,
+    SPACE_BOWSER
 } SpaceType;
 
 typedef enum {
@@ -179,6 +180,9 @@ typedef struct {
     int        last_land_type;
     Popup      popup;
     int        contest_rewards[MAX_PLAYERS];
+    ItemType   shop_offer[3];       /* items for sale on this shop visit (ITEM_NONE = sold) */
+    int        shop_cost[3];
+    int        shop_star_cost;
 
     bool       team_mode;
     bool       double_dice;

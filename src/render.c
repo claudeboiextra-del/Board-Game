@@ -87,7 +87,8 @@ static const unsigned char *glyph(char ch) {
     case '\'': return F[44]; default: return F[45];
     }
 }
-#define TXT_CHUNK 240
+#define BATCH_Q 8   /* quads per Begin/End: keep every Tiny3D draw tiny, like the old 2D renderer */
+#define TXT_CHUNK BATCH_Q
 static void text_pass(float x, float y, const char *s, float sc, u32 col) {
     int inq = 0; float px = x;
     for (; *s; ++s) {
@@ -168,7 +169,7 @@ int render_project(const GameContext *g, float x, float y, float z, float *sx, f
 }
 
 enum { L_FLOOR = 1, L_DECAL, L_PATH, L_PATHTOP, L_PAD, L_PADTOP, L_SHADOW, L_OBJ, L_FX };
-#define MAX_Q 4096
+#define MAX_Q 3200
 typedef struct { float x[4], y[4]; float gd, qd; u32 col; int layer; } Q;
 static Q qb[MAX_Q];
 static unsigned short ord[MAX_Q];
@@ -177,6 +178,7 @@ static float g_gd;
 #define F_CONVEX 1
 #define F_UNLIT  2
 
+static void dbg_note(int n);
 static void grp(V3 c) { V3 d = vsub(c, C.pos); g_gd = vdot(d, C.f); }
 
 static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
@@ -188,6 +190,7 @@ static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
         (sx[0] > SCR_W + 60 && sx[1] > SCR_W + 60 && sx[2] > SCR_W + 60 && sx[3] > SCR_W + 60) ||
         (sy[0] < -60 && sy[1] < -60 && sy[2] < -60 && sy[3] < -60) ||
         (sy[0] > SCR_H + 60 && sy[1] > SCR_H + 60 && sy[2] > SCR_H + 60 && sy[3] > SCR_H + 60)) return;
+    for (i = 0; i < 4; ++i) if (sx[i] < -3000.f || sx[i] > 3800.f || sy[i] < -3000.f || sy[i] > 3500.f) return;
     n = vnorm(vcross(vsub(b, a), vsub(d, a)));
     ctr = vmul(vadd(vadd(a, b), vadd(c, d)), 0.25f);
     view = vsub(ctr, C.pos);
@@ -212,11 +215,12 @@ static int qcmp(const void *A, const void *B) {
 }
 static void world_flush(void) {
     int i, k = 0;
+    dbg_note(nq);
     for (i = 0; i < nq; ++i) ord[i] = (unsigned short)i;
     if (nq > 1) qsort(ord, (size_t)nq, sizeof(unsigned short), qcmp);
     i = 0;
     while (i < nq) {
-        int m = nq - i; if (m > 200) m = 200;
+        int m = nq - i; if (m > BATCH_Q) m = BATCH_Q;
         tiny3d_SetPolygon(TINY3D_QUADS);
         for (k = 0; k < m; ++k) {
             const Q *q = &qb[ord[i + k]]; int j;
@@ -400,6 +404,7 @@ static void space_colors(SpaceType t, int revealed, u32 *cap, float *r) {
     case SPACE_HIDDEN_COIN: case SPACE_HIDDEN_STAR: *cap = revealed ? 0xFF16A085 : 0xFF7F8C8D; break;
     case SPACE_WARP: *cap = 0xFF1ABC9C; *r = 1.3f; break;
     case SPACE_HAZARD: *cap = 0xFFE67E22; break;
+    case SPACE_BOWSER: *cap = 0xFF8E1B1B; *r = 1.3f; break;
     default: break;
     }
 }
@@ -443,6 +448,18 @@ static void draw_icon(V3 c, SpaceType t, int revealed, float tm, int idx) {
     case SPACE_WARP: {
         prim_upring(p, 0.5f, 0.85f, sp * 0.6f, 0.05f, 0xFF1ABC9C, 12, 0);
         prim_upring(p, 0.2f, 0.4f, sp * 0.6f + 1.57f, 0.04f, 0xFF76D7C4, 8, 0);
+        break; }
+    case SPACE_BOWSER: {
+        int k;
+        V3 sc = v3(c.x, PAD_TOP + 0.75f, c.z);
+        prim_sphere(sc, v3(0.85f, 0.6f, 0.85f), 0xFF2E7D32, 3, 10, 0);
+        for (k = 0; k < 6; ++k) {
+            float a = (float)k / 6 * 6.2831853f + sp * 0.15f;
+            prim_cone(v3(c.x + cosf(a) * 0.62f, PAD_TOP + 0.78f, c.z + sinf(a) * 0.62f), 0.18f, 0.55f, 0xFFF5E6C8, 4, 0.3f, 0);
+        }
+        prim_cone(v3(c.x, PAD_TOP + 1.25f, c.z), 0.2f, 0.5f, 0xFFF5E6C8, 4, 0.3f, 0);
+        g_layer = L_PADTOP; grp(c);
+        prim_ring(v3(c.x, PAD_TOP + 0.02f, c.z), 0.95f, 1.1f + 0.1f * sinf(tm * 6.0f), col_alpha(0xFFFF4B3E, 170), 12, F_UNLIT);
         break; }
     case SPACE_HAZARD: {
         int k;
@@ -520,7 +537,7 @@ static void draw_scenery(const GameContext *g) {
         prim_ellipse(v3(0, 0.03f, 0), 12.6f, 6.1f, 0xFFE8D39A, 22, 0);
         g_layer = L_DECAL + 0; grp(v3(0, 0.01f, 0));
         prim_ellipse(v3(0, 0.05f, 0), 11.3f, 5.1f, 0xFF4FB46A, 22, 0);
-        palm(-6.0f, -1.5f, 3.4f, 1.1f); palm(5.5f, -2.2f, 3.0f, 1.0f); palm(0.5f, 1.0f, 3.8f, 1.2f); palm(-3.0f, 2.2f, 2.6f, 0.9f);
+        palm(-2.8f, -0.8f, 3.4f, 1.1f); palm(2.6f, 0.2f, 3.0f, 1.0f); palm(-0.2f, 1.6f, 2.6f, 0.9f);
         palm(-17.5f, -6.5f, 3.0f, 1.0f); palm(17.0f, -6.0f, 3.2f, 1.0f);
         g_layer = L_OBJ; grp(v3(8, 0.3f, 2));
         prim_sphere(v3(8.0f, 0.2f, 2.0f), v3(0.7f, 0.5f, 0.6f), 0xFF7F8C8D, 2, 6, 0);
@@ -538,10 +555,10 @@ static void draw_scenery(const GameContext *g) {
         }
         for (i = -3; i <= 3; ++i)
             ribbon(v3(-17.0f, 0.02f, i * 3.2f), v3(17.0f, 0.02f, i * 3.2f), 0.08f, 0.02f, 0x66E67E22, L_DECAL, F_UNLIT);
-        crystal(0.0f, -3.0f, 4.6f, 1.0f, 0xFF9B59B6, 0.3f);
-        crystal(2.0f, -1.0f, 3.0f, 0.7f, 0xFF1ABC9C, 0.8f);
-        crystal(-2.3f, -1.5f, 2.6f, 0.7f, 0xFFE67E22, 0.1f);
-        crystal(0.5f, 2.5f, 3.2f, 0.8f, 0xFF3498DB, 0.5f);
+        crystal(-6.5f, -4.8f, 4.2f, 1.0f, 0xFF9B59B6, 0.3f);
+        crystal(6.5f, 4.8f, 3.0f, 0.8f, 0xFF1ABC9C, 0.8f);
+        crystal(-6.5f, 4.8f, 2.6f, 0.7f, 0xFFE67E22, 0.1f);
+        crystal(6.5f, -4.8f, 3.2f, 0.8f, 0xFF3498DB, 0.5f);
         crystal(-16.5f, -8.5f, 3.6f, 0.9f, 0xFF9B59B6, 0.2f); crystal(16.5f, -8.5f, 3.2f, 0.9f, 0xFF1ABC9C, 0.6f);
         crystal(-16.5f, 8.5f, 2.2f, 0.7f, 0xFFE67E22, 0.4f); crystal(16.5f, 8.5f, 2.4f, 0.7f, 0xFF3498DB, 0.9f);
         crystal(-9.0f, -9.5f, 2.6f, 0.7f, 0xFF3498DB, 0.3f); crystal(9.0f, -9.5f, 3.0f, 0.8f, 0xFF9B59B6, 0.7f);
@@ -554,10 +571,7 @@ static void draw_scenery(const GameContext *g) {
             wq(v3(x0, 0, z0), v3(x0 + 6.5f, 0, z0), v3(x0 + 6.5f, 0, z0 + 8), v3(x0, 0, z0 + 8), col, 0, v3(x0, 0, z0));
         }
         g_layer = L_DECAL; grp(v3(0, 0, 0));
-        prim_disc(v3(0, 0.03f, 0), 2.6f, 0xFF5D6D7E, 14, 0);
-        g_layer = L_OBJ; grp(v3(0, 0.6f, 0));
-        prim_cyl(v3(0, 0, 0), 1.1f, 0.5f, 0xFF7F8C8D, 0xFF3498DB, 10, 0);
-        prim_sphere(v3(0, 1.2f, 0), v3(0.35f, 0.35f, 0.35f), 0xFF85C1E9, 2, 6, 0);
+        prim_ellipse(v3(0, 0.03f, 0), 3.0f, 1.9f, 0xFF4A5568, 14, 0);
         building(-15.0f, -11.5f, 2.2f, 1.6f, 7.0f, 0xFF34495E, tm); building(-9.5f, -11.5f, 2.0f, 1.6f, 4.5f, 0xFF3F5873, tm);
         building(-4.0f, -11.5f, 2.4f, 1.6f, 8.0f, 0xFF2E4057, tm); building(2.0f, -11.5f, 2.0f, 1.6f, 5.5f, 0xFF3F5873, tm);
         building(8.0f, -11.5f, 2.4f, 1.6f, 7.5f, 0xFF34495E, tm); building(14.0f, -11.5f, 2.0f, 1.6f, 5.0f, 0xFF2E4057, tm);
@@ -883,7 +897,7 @@ static void draw_minimap(const GameContext *g, float mx, float my, float mw, flo
         if (n->type == SPACE_STAR) c = 0xFFF1C40F; else if (n->type == SPACE_SHOP) c = 0xFFE67E22;
         else if (n->type == SPACE_PLUS_COIN) c = 0xFF2ECC71; else if (n->type == SPACE_MINUS_COIN) c = 0xFFE74C3C;
         else if (n->type == SPACE_WARP) c = 0xFF1ABC9C; else if (n->type == SPACE_HAZARD) c = 0xFFE67E22;
-        else if (n->type == SPACE_EVENT) c = 0xFF9B59B6;
+        else if (n->type == SPACE_EVENT) c = 0xFF9B59B6; else if (n->type == SPACE_BOWSER) c = 0xFF8E1B1B;
         draw_circle(mx + n->x * mw, my + n->y * mh, n->type == SPACE_STAR ? 5.f : 3.5f, c, 10);
     }
     draw_circle(mx + b->nodes[b->start_node].x * mw, my + b->nodes[b->start_node].y * mh, 6, 0xFFFFFFFF, 10);
@@ -924,6 +938,9 @@ static void draw_popup(const GameContext *g) {
     case 4: if (g->popup.value > 0) snprintf(b, sizeof(b), "+%d", g->popup.value); else if (g->popup.value < 0) snprintf(b, sizeof(b), "%d", g->popup.value); else snprintf(b, sizeof(b), "WARP!"); col = 0xFF9B59B6; break;
     case 5: snprintf(b, sizeof(b), g->popup.value ? "ITEM!" : "BLOCKED!"); col = 0xFF3498DB; break;
     case 6: snprintf(b, sizeof(b), "SWAP!"); col = 0xFF1ABC9C; break;
+    case 8: if (g->popup.value < 0) snprintf(b, sizeof(b), "BOWSER! %d", g->popup.value); else snprintf(b, sizeof(b), "BOWSER!"); col = 0xFFE74C3C; break;
+    case 9: snprintf(b, sizeof(b), "BACK TO START!"); col = 0xFFE74C3C; break;
+    case 10: snprintf(b, sizeof(b), "ITEMS LOST!"); col = 0xFFE74C3C; break;
     default: snprintf(b, sizeof(b), g->popup.value == 2 ? "DOUBLE DICE!" : (g->popup.value == 3 ? "BOOST +3!" : "SHIELD UP!")); col = 0xFF3498DB; break;
     }
     draw_text_c(g->popup.x, g->popup.y, b, 4, col, 1);
@@ -969,19 +986,28 @@ static void draw_item_panel(const GameContext *g) {
     } else draw_text_c(424, 262, "SKIP", 3, 0xFFFFFFFF, 1);
 }
 static void draw_shop_panel(const GameContext *g) {
-    const Player *p = &g->players[g->current_player]; int c = g->item_cursor % 3; char b[16];
-    int cost = 20;
-    { int best = 0, k; for (k = 1; k < g->player_count; ++k) if (g->players[k].stars < g->players[best].stars || (g->players[k].stars == g->players[best].stars && g->players[k].coins < g->players[best].coins)) best = k; if (p->id == best && g->player_count > 1) cost = 15; }
-    draw_rect(210, 140, 428, 230, 0xEE1A2332); draw_rect(218, 148, 412, 214, 0xFF243447);
-    draw_text_c(424, 156, "SHOP", 4, 0xFFE67E22, 1);
-    draw_rect(236, 190, 110, 100, c == 0 ? 0xFFF1C40F : 0xFF1C2833); draw_label_star(291, 222, 14, 0xFFFFFFFF);
-    snprintf(b, sizeof(b), "%d", cost); draw_text_c(291, 250, b, 3, c == 0 ? 0xFF1A1A1A : 0xFFF39C12, 0);
-    draw_text_c(291, 272, "STAR", 2, c == 0 ? 0xFF1A1A1A : 0xFFBDC3C7, 0);
-    draw_rect(366, 190, 110, 100, c == 1 ? 0xFF9B59B6 : 0xFF1C2833); draw_circle(421, 222, 14, 0xFFFFFFFF, 10);
-    draw_text_c(421, 250, "8", 3, 0xFFF39C12, 0); draw_text_c(421, 272, "ITEM", 2, 0xFFBDC3C7, 0);
-    draw_rect(496, 190, 110, 100, c == 2 ? 0xFF7F8C8D : 0xFF1C2833); draw_text_c(551, 232, "LEAVE", 2, 0xFFFFFFFF, 0);
-    snprintf(b, sizeof(b), "COINS %d", p->coins); draw_text_c(424, 306, b, 3, 0xFFF39C12, 1);
-    draw_text_c(424, 336, "O: CHANGE   X: BUY", 2, 0xFFBDC3C7, 0);
+    const Player *p = &g->players[g->current_player]; int c = g->item_cursor % 5, i; char b[24];
+    draw_rect(110, 120, 628, 270, 0xEE1A2332); draw_rect(118, 128, 612, 254, 0xFF243447);
+    draw_text_c(424, 136, "SHOP", 4, 0xFFE67E22, 1);
+    for (i = 0; i < 5; ++i) {
+        float x = 130 + i * 118, y = 176; int sel = (c == i); u32 bg = sel ? 0xFFF1C40F : 0xFF1C2833;
+        u32 fg = sel ? 0xFF1A1A1A : 0xFFFFFFFF; ItemType it = ITEM_NONE; int cost = 0, sold = 0;
+        draw_rect(x, y, 108, 130, bg);
+        if (i == 0) { draw_label_star(x + 54, y + 36, 16, sel ? 0xFF1A1A1A : 0xFFF1C40F); cost = g->shop_star_cost; draw_text_c(x + 54, y + 66, "STAR", 2, fg, 0); }
+        else if (i < 4) {
+            it = g->shop_offer[i - 1]; cost = g->shop_cost[i - 1]; sold = (it == ITEM_NONE);
+            if (!sold) { draw_item_icon(x + 40, y + 14, it, 0); draw_text_c(x + 54, y + 52, ITEM_NAMES[it], 2, fg, 0); }
+            else draw_text_c(x + 54, y + 36, "SOLD", 3, 0xFF7F8C8D, 0);
+        } else { draw_text_c(x + 54, y + 50, "LEAVE", 3, fg, 0); }
+        if (i < 4 && !sold) {
+            draw_circle(x + 34, y + 104, 7, 0xFFF39C12, 8);
+            snprintf(b, sizeof(b), "%d", cost); draw_numi(x + 48, y + 97, cost, 3, (p->coins >= cost) ? (sel ? 0xFF1A1A1A : 0xFFF39C12) : 0xFFE74C3C, 0);
+        }
+    }
+    if (c >= 1 && c <= 3 && g->shop_offer[c - 1] != ITEM_NONE) draw_text_c(424, 316, ITEM_DESC[g->shop_offer[c - 1]], 3, 0xFFDDE6F0, 1);
+    else if (c == 0) draw_text_c(424, 316, "BUY A STAR!", 3, 0xFFF1C40F, 1);
+    snprintf(b, sizeof(b), "COINS %d", p->coins); draw_text_c(424, 344, b, 3, 0xFFF39C12, 1);
+    draw_text_c(424, 368, "O: CHANGE   X: BUY / LEAVE", 2, 0xFFBDC3C7, 0);
 }
 static void sky(u32 top, u32 bot) {
     draw_rect(0, 0, SCR_W, SCR_H * 0.5f, top); draw_rect(0, SCR_H * 0.5f, SCR_W, SCR_H * 0.5f, bot);
@@ -1199,8 +1225,14 @@ static void draw_round_end(const GameContext *g) {
 /* ------------------------------------------------------------------ */
 /* frame                                                               */
 /* ------------------------------------------------------------------ */
+static int dbg_frames = 0;
+static void dbg_note(int n) { if (dbg_frames < 4) LOG_I("render f%d world quads=%d", dbg_frames, n); }
+static void dbg(const char *tag, int st, int n) {
+    if (dbg_frames < 4) LOG_I("render f%d %s state=%d quads=%d", dbg_frames, tag, st, n);
+}
 void game_render(GameContext *g) {
     GameState st = g->state; int rank[MAX_PLAYERS] = {0, 0, 0, 0};
+    dbg("begin", (int)st, 0);
     tiny3d_Clear(0xFF0B1320, TINY3D_CLEAR_ALL);
     tiny3d_AlphaTest(1, 0x10, TINY3D_ALPHA_FUNC_GEQUAL);
     tiny3d_BlendFunc(1, (blend_src_func)(TINY3D_BLEND_FUNC_SRC_RGB_SRC_ALPHA | TINY3D_BLEND_FUNC_SRC_ALPHA_SRC_ALPHA),
@@ -1261,5 +1293,8 @@ void game_render(GameContext *g) {
         break;
     }
     if (g->state == STATE_PAUSE) draw_pause_overlay();
+    dbg("flip", (int)st, 0);
     tiny3d_Flip();
+    dbg("done", (int)st, 0);
+    if (dbg_frames < 1000) dbg_frames++;
 }

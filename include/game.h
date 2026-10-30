@@ -6,7 +6,7 @@
 
 #define MAX_PLAYERS     4
 #define PAD_COUNT       4
-#define MAX_NODES       64
+#define MAX_NODES       96
 #define MAX_ROUNDS_OPTS 4
 #define BOARD_COUNT     3
 #define MAX_ITEMS       2
@@ -88,9 +88,9 @@ typedef enum {
 /* minigame stage: x position of player slot i when n players are on stage */
 #define STAGE_SLOT_X(i, n) (((float)(i) - ((float)(n) - 1.0f) * 0.5f) * 6.4f)
 
-/* World units: board X = (node.x-0.5)*34, Z = (node.y-0.5)*20 */
-#define WORLD_SX 34.0f
-#define WORLD_SZ 20.0f
+/* World units: board X = (node.x-0.5)*WORLD_SX, Z = (node.y-0.5)*WORLD_SZ */
+#define WORLD_SX 56.0f
+#define WORLD_SZ 32.0f
 
 typedef struct {
     int  id;

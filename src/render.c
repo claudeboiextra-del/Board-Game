@@ -165,7 +165,10 @@ static int proj(const Cam *c, V3 p, float *sx, float *sy, float *dep) {
 }
 int render_project(const GameContext *g, float x, float y, float z, float *sx, float *sy) {
     Cam c; float d; cam_setup(g, &c);
-    return proj(&c, v3(x, y, z), sx, sy, &d);
+    if (!proj(&c, v3(x, y, z), sx, sy, &d)) return 0;
+    /* callers place 2D popups/sparks at the result: refuse points far outside the screen */
+    if (!(*sx > -100.0f && *sx < 950.0f && *sy > -100.0f && *sy < 620.0f)) return 0;
+    return 1;
 }
 
 enum { L_FLOOR = 1, L_DECAL, L_PATH, L_PATHTOP, L_PAD, L_PADTOP, L_SHADOW, L_OBJ, L_FX };
@@ -179,6 +182,52 @@ static float g_gd;
 #define F_UNLIT  2
 
 static void dbg_note(int n);
+#define CLIP_X0 -64.0f
+#define CLIP_X1 912.0f
+#define CLIP_Y0 -64.0f
+#define CLIP_Y1 576.0f
+static void store_quad(const float *x, const float *y, float qd, u32 col) {
+    int i;
+    if (nq >= MAX_Q) return;
+    for (i = 0; i < 4; ++i) { qb[nq].x[i] = x[i]; qb[nq].y[i] = y[i]; }
+    qb[nq].gd = g_gd; qb[nq].qd = qd; qb[nq].col = col; qb[nq].layer = g_layer;
+    nq++;
+}
+/* Sutherland-Hodgman against one axis-aligned edge. axis 0 = x, 1 = y; keep = (v >= lim) if ge else (v <= lim) */
+static int clip_edge(const float *ix, const float *iy, int n, float *ox, float *oy, int axis, float lim, int ge) {
+    int i, m = 0;
+    for (i = 0; i < n; ++i) {
+        int j = (i + 1) % n;
+        float ax = ix[i], ay = iy[i], bx = ix[j], by = iy[j];
+        float va = axis ? ay : ax, vb = axis ? by : bx;
+        int ina = ge ? (va >= lim) : (va <= lim), inb = ge ? (vb >= lim) : (vb <= lim);
+        if (ina && m < 11) { ox[m] = ax; oy[m] = ay; m++; }
+        if (ina != inb && m < 11) {
+            float t = (lim - va) / (vb - va);
+            ox[m] = ax + (bx - ax) * t; oy[m] = ay + (by - ay) * t; m++;
+        }
+    }
+    return m;
+}
+/* clip a screen-space quad to the safe rectangle and emit it as 1..n-2 quads (triangle fan, degenerate quads) */
+static void emit_clipped(const float *sx, const float *sy, float qd, u32 col) {
+    float ax[16], ay[16], bx[16], by[16]; int n = 4, i;
+    int inside = 1;
+    for (i = 0; i < 4; ++i)
+        if (sx[i] < CLIP_X0 || sx[i] > CLIP_X1 || sy[i] < CLIP_Y0 || sy[i] > CLIP_Y1) inside = 0;
+    if (inside) { store_quad(sx, sy, qd, col); return; }
+    for (i = 0; i < 4; ++i) { ax[i] = sx[i]; ay[i] = sy[i]; }
+    n = clip_edge(ax, ay, n, bx, by, 0, CLIP_X0, 1); if (n < 3) return;
+    n = clip_edge(bx, by, n, ax, ay, 0, CLIP_X1, 0); if (n < 3) return;
+    n = clip_edge(ax, ay, n, bx, by, 1, CLIP_Y0, 1); if (n < 3) return;
+    n = clip_edge(bx, by, n, ax, ay, 1, CLIP_Y1, 0); if (n < 3) return;
+    for (i = 1; i + 1 < n; ++i) {
+        float qx[4], qy[4];
+        qx[0] = ax[0]; qy[0] = ay[0]; qx[1] = ax[i]; qy[1] = ay[i];
+        qx[2] = ax[i + 1]; qy[2] = ay[i + 1]; qx[3] = ax[i + 1]; qy[3] = ay[i + 1];
+        store_quad(qx, qy, qd, col);
+    }
+}
 static void grp(V3 c) { V3 d = vsub(c, C.pos); g_gd = vdot(d, C.f); }
 
 static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
@@ -190,7 +239,7 @@ static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
         (sx[0] > SCR_W + 60 && sx[1] > SCR_W + 60 && sx[2] > SCR_W + 60 && sx[3] > SCR_W + 60) ||
         (sy[0] < -60 && sy[1] < -60 && sy[2] < -60 && sy[3] < -60) ||
         (sy[0] > SCR_H + 60 && sy[1] > SCR_H + 60 && sy[2] > SCR_H + 60 && sy[3] > SCR_H + 60)) return;
-    for (i = 0; i < 4; ++i) if (sx[i] < -3000.f || sx[i] > 3800.f || sy[i] < -3000.f || sy[i] > 3500.f) return;
+    for (i = 0; i < 4; ++i) if (!(sx[i] > -1.0e6f && sx[i] < 1.0e6f && sy[i] > -1.0e6f && sy[i] < 1.0e6f)) return;  /* NaN / inf guard */
     n = vnorm(vcross(vsub(b, a), vsub(d, a)));
     ctr = vmul(vadd(vadd(a, b), vadd(c, d)), 0.25f);
     view = vsub(ctr, C.pos);
@@ -202,9 +251,7 @@ static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
         float l = vdot(n, LIGHT); if (l < 0) l = 0;
         col = col_scale(col, 0.42f + 0.62f * l);
     }
-    for (i = 0; i < 4; ++i) { qb[nq].x[i] = sx[i]; qb[nq].y[i] = sy[i]; }
-    qb[nq].gd = g_gd; qb[nq].qd = dz * 0.25f; qb[nq].col = col; qb[nq].layer = g_layer;
-    nq++;
+    emit_clipped(sx, sy, dz * 0.25f, col);
 }
 static int qcmp(const void *A, const void *B) {
     const Q *a = &qb[*(const unsigned short *)A], *b = &qb[*(const unsigned short *)B];
@@ -520,63 +567,66 @@ static void building(float x, float z, float w, float d, float h, u32 col, float
                v3(wx - 0.25f, wy + 0.5f, z + d + 0.02f), lc, F_UNLIT, c);
         }
 }
+static void tree(float x, float z, float h, float r) {
+    g_layer = L_OBJ; grp(v3(x, h * 0.5f, z));
+    prim_cyl(v3(x, 0, z), 0.18f, h * 0.55f, 0xFF7B5B3A, 0, 5, 0);
+    prim_sphere(v3(x, h * 0.55f + r * 0.6f, z), v3(r, r * 0.9f, r), 0xFF2E9E4F, 2, 7, 0);
+}
+static void floor_tiles(u32 ca, u32 cb, float tm, int shimmer) {
+    int ix, iz;
+    for (ix = 0; ix < 8; ++ix) for (iz = 0; iz < 4; ++iz) {
+        float x0 = -42.0f + ix * 10.5f, z0 = -26.0f + iz * 13.0f;
+        u32 col = ((ix + iz) & 1) ? ca : cb;
+        if (shimmer) col = col_scale(col, 0.92f + 0.12f * (0.5f + 0.5f * sinf(tm * 1.2f + ix * 1.7f + iz * 2.3f)));
+        g_layer = L_FLOOR; grp(v3(x0 + 5.2f, 0, z0 + 6.5f));
+        wq(v3(x0, 0, z0), v3(x0 + 10.5f, 0, z0), v3(x0 + 10.5f, 0, z0 + 13.0f), v3(x0, 0, z0 + 13.0f), col, 0, v3(x0, 0, z0));
+    }
+}
 static void draw_scenery(const GameContext *g) {
     float tm = g->anim_t; int i;
     if (g->board_idx == 0) {
-        /* Lagoon: water, island, palms */
-        int ix, iz;
-        for (ix = 0; ix < 8; ++ix) for (iz = 0; iz < 4; ++iz) {
-            float x0 = -26.0f + ix * 6.5f, z0 = -16.0f + iz * 8.0f;
-            float sh = 0.5f + 0.5f * sinf(tm * 1.2f + ix * 1.7f + iz * 2.3f);
-            u32 col = ((ix + iz) & 1) ? 0xFF1F8FC4 : 0xFF2AA6D8;
-            col = col_scale(col, 0.92f + 0.12f * sh);
-            g_layer = L_FLOOR; grp(v3(x0 + 3.2f, 0, z0 + 4));
-            wq(v3(x0, 0, z0), v3(x0 + 6.5f, 0, z0), v3(x0 + 6.5f, 0, z0 + 8), v3(x0, 0, z0 + 8), col, 0, v3(x0, 0, z0));
-        }
+        /* Lagoon: water, big island, palms between the lanes */
+        static const float pal[][2] = {{-3.5f,-3.0f},{3.5f,-3.0f},{-3.5f,3.0f},{3.5f,3.0f},{-4,-9.5f},{4,-9.5f},{-4,9.5f},{4,9.5f},
+                                       {-16.5f,-4.5f},{-16.5f,4.5f},{16.5f,-4.5f},{16.5f,4.5f}};
+        floor_tiles(0xFF1F8FC4, 0xFF2AA6D8, tm, 1);
         g_layer = L_DECAL; grp(v3(0, 0, 0));
-        prim_ellipse(v3(0, 0.03f, 0), 12.6f, 6.1f, 0xFFE8D39A, 22, 0);
-        g_layer = L_DECAL + 0; grp(v3(0, 0.01f, 0));
-        prim_ellipse(v3(0, 0.05f, 0), 11.3f, 5.1f, 0xFF4FB46A, 22, 0);
-        palm(-2.8f, -0.8f, 3.4f, 1.1f); palm(2.6f, 0.2f, 3.0f, 1.0f); palm(-0.2f, 1.6f, 2.6f, 0.9f);
-        palm(-17.5f, -6.5f, 3.0f, 1.0f); palm(17.0f, -6.0f, 3.2f, 1.0f);
-        g_layer = L_OBJ; grp(v3(8, 0.3f, 2));
-        prim_sphere(v3(8.0f, 0.2f, 2.0f), v3(0.7f, 0.5f, 0.6f), 0xFF7F8C8D, 2, 6, 0);
-        prim_sphere(v3(-9.0f, 0.2f, 1.0f), v3(0.6f, 0.4f, 0.5f), 0xFF95A5A6, 2, 6, 0);
+        prim_ellipse(v3(0, 0.03f, 0), 27.0f, 15.5f, 0xFFE8D39A, 28, 0);
+        g_layer = L_DECAL; grp(v3(0, 0.01f, 0));
+        prim_ellipse(v3(0, 0.05f, 0), 25.2f, 14.0f, 0xFF4FB46A, 28, 0);
+        for (i = 0; i < 12; ++i) palm(pal[i][0], pal[i][1], 2.6f + 0.3f * (float)(i % 4), 0.9f + 0.05f * (float)(i % 3));
+        palm(-27.5f, -9.0f, 3.2f, 1.0f); palm(27.5f, -9.0f, 3.4f, 1.0f); palm(-27.0f, 9.0f, 3.0f, 1.0f); palm(27.5f, 9.0f, 3.2f, 1.0f);
+        g_layer = L_OBJ; grp(v3(0, 0.3f, 0));
+        prim_sphere(v3(-10.0f, 0.2f, 3.0f), v3(0.7f, 0.5f, 0.6f), 0xFF7F8C8D, 2, 6, 0);
+        prim_sphere(v3(10.5f, 0.2f, -3.5f), v3(0.6f, 0.4f, 0.5f), 0xFF95A5A6, 2, 6, 0);
     } else if (g->board_idx == 1) {
-        int ix, iz;
-        for (ix = 0; ix < 8; ++ix) for (iz = 0; iz < 4; ++iz) {
-            float x0 = -26.0f + ix * 6.5f, z0 = -16.0f + iz * 8.0f;
-            u32 col = ((ix + iz) & 1) ? 0xFF2B1B45 : 0xFF361F58;
-            g_layer = L_FLOOR; grp(v3(x0 + 3.2f, 0, z0 + 4));
-            wq(v3(x0, 0, z0), v3(x0 + 6.5f, 0, z0), v3(x0 + 6.5f, 0, z0 + 8), v3(x0, 0, z0 + 8), col, 0, v3(x0, 0, z0));
+        static const float cr[][2] = {{-15,-8},{-15,8},{15,-8},{15,8},{0,-6.5f},{0,6.5f},{-27,-4},{27,4},{-26,-15},{26,-15},{-26,15},{26,15},{-12,-17},{12,-17}};
+        floor_tiles(0xFF2B1B45, 0xFF361F58, tm, 0);
+        for (i = -6; i <= 6; ++i)
+            ribbon(v3(i * 4.5f, 0.02f, -17.0f), v3(i * 4.5f, 0.02f, 17.0f), 0.08f, 0.02f, 0x661ABC9C, L_DECAL, F_UNLIT);
+        for (i = -4; i <= 4; ++i)
+            ribbon(v3(-28.0f, 0.02f, i * 3.7f), v3(28.0f, 0.02f, i * 3.7f), 0.08f, 0.02f, 0x66E67E22, L_DECAL, F_UNLIT);
+        for (i = 0; i < 14; ++i) {
+            static const u32 cc[4] = {0xFF9B59B6, 0xFF1ABC9C, 0xFFE67E22, 0xFF3498DB};
+            crystal(cr[i][0], cr[i][1], 2.6f + 0.55f * (float)((i * 5) % 4), 0.7f + 0.1f * (float)(i % 3), cc[i & 3], 0.3f * (float)i);
         }
-        for (i = -4; i <= 4; ++i) {
-            ribbon(v3(i * 3.4f, 0.02f, -10.0f), v3(i * 3.4f, 0.02f, 10.0f), 0.08f, 0.02f, 0x661ABC9C, L_DECAL, F_UNLIT);
-        }
-        for (i = -3; i <= 3; ++i)
-            ribbon(v3(-17.0f, 0.02f, i * 3.2f), v3(17.0f, 0.02f, i * 3.2f), 0.08f, 0.02f, 0x66E67E22, L_DECAL, F_UNLIT);
-        crystal(-6.5f, -4.8f, 4.2f, 1.0f, 0xFF9B59B6, 0.3f);
-        crystal(6.5f, 4.8f, 3.0f, 0.8f, 0xFF1ABC9C, 0.8f);
-        crystal(-6.5f, 4.8f, 2.6f, 0.7f, 0xFFE67E22, 0.1f);
-        crystal(6.5f, -4.8f, 3.2f, 0.8f, 0xFF3498DB, 0.5f);
-        crystal(-16.5f, -8.5f, 3.6f, 0.9f, 0xFF9B59B6, 0.2f); crystal(16.5f, -8.5f, 3.2f, 0.9f, 0xFF1ABC9C, 0.6f);
-        crystal(-16.5f, 8.5f, 2.2f, 0.7f, 0xFFE67E22, 0.4f); crystal(16.5f, 8.5f, 2.4f, 0.7f, 0xFF3498DB, 0.9f);
-        crystal(-9.0f, -9.5f, 2.6f, 0.7f, 0xFF3498DB, 0.3f); crystal(9.0f, -9.5f, 3.0f, 0.8f, 0xFF9B59B6, 0.7f);
     } else {
-        int ix, iz;
-        for (ix = 0; ix < 8; ++ix) for (iz = 0; iz < 4; ++iz) {
-            float x0 = -26.0f + ix * 6.5f, z0 = -16.0f + iz * 8.0f;
-            u32 col = ((ix + iz) & 1) ? 0xFF2A2F45 : 0xFF313852;
-            g_layer = L_FLOOR; grp(v3(x0 + 3.2f, 0, z0 + 4));
-            wq(v3(x0, 0, z0), v3(x0 + 6.5f, 0, z0), v3(x0 + 6.5f, 0, z0 + 8), v3(x0, 0, z0 + 8), col, 0, v3(x0, 0, z0));
-        }
+        static const float tr[][2] = {{-19,-4},{-12,-5},{-19,4},{-12,5},{12,-5},{19,-4},{12,5},{19,4},{-15.5f,0},{15.5f,0}};
+        floor_tiles(0xFF2A2F45, 0xFF313852, tm, 0);
         g_layer = L_DECAL; grp(v3(0, 0, 0));
-        prim_ellipse(v3(0, 0.03f, 0), 3.0f, 1.9f, 0xFF4A5568, 14, 0);
-        building(-15.0f, -11.5f, 2.2f, 1.6f, 7.0f, 0xFF34495E, tm); building(-9.5f, -11.5f, 2.0f, 1.6f, 4.5f, 0xFF3F5873, tm);
-        building(-4.0f, -11.5f, 2.4f, 1.6f, 8.0f, 0xFF2E4057, tm); building(2.0f, -11.5f, 2.0f, 1.6f, 5.5f, 0xFF3F5873, tm);
-        building(8.0f, -11.5f, 2.4f, 1.6f, 7.5f, 0xFF34495E, tm); building(14.0f, -11.5f, 2.0f, 1.6f, 5.0f, 0xFF2E4057, tm);
-        building(-19.0f, -2.0f, 1.8f, 2.0f, 5.0f, 0xFF3F5873, tm); building(19.0f, -2.0f, 1.8f, 2.0f, 6.0f, 0xFF34495E, tm);
-        building(-19.0f, 6.0f, 1.6f, 1.6f, 2.5f, 0xFF2E4057, tm); building(19.0f, 6.0f, 1.6f, 1.6f, 2.2f, 0xFF3F5873, tm);
+        prim_ellipse(v3(0, 0.03f, 0), 5.2f, 7.4f, 0xFF4A5568, 16, 0);
+        prim_ellipse(v3(-15.5f, 0.04f, 0), 6.2f, 8.2f, 0xFF3F7F58, 18, 0);
+        prim_ellipse(v3(15.5f, 0.04f, 0), 6.2f, 8.2f, 0xFF3F7F58, 18, 0);
+        g_layer = L_OBJ; grp(v3(0, 0.4f, 0));
+        prim_cyl(v3(0, 0, 0), 1.1f, 0.5f, 0xFF7F8C8D, 0xFF3498DB, 10, 0);
+        prim_sphere(v3(0, 1.2f, 0), v3(0.35f, 0.35f, 0.35f), 0xFF85C1E9, 2, 6, 0);
+        for (i = 0; i < 10; ++i) tree(tr[i][0], tr[i][1], 2.0f + 0.3f * (float)(i % 3), 0.9f);
+        for (i = 0; i < 8; ++i) {
+            float bx = -24.0f + 7.0f * (float)i, bh = 4.0f + 1.2f * (float)((i * 5) % 6);
+            building(bx, -17.0f, 2.2f, 1.6f, bh, (i & 1) ? 0xFF3F5873 : 0xFF34495E, tm);
+        }
+        building(-30.0f, -6.0f, 1.8f, 2.0f, 5.0f, 0xFF3F5873, tm); building(30.0f, -6.0f, 1.8f, 2.0f, 6.0f, 0xFF34495E, tm);
+        building(-30.0f, 8.0f, 1.8f, 1.8f, 2.6f, 0xFF2E4057, tm); building(30.0f, 8.0f, 1.8f, 1.8f, 2.2f, 0xFF3F5873, tm);
+        for (i = 0; i < 4; ++i) building(-18.0f + 12.0f * (float)i, 17.5f, 2.0f, 1.4f, 1.6f + 0.4f * (float)(i & 1), 0xFF2E4057, tm);
     }
 }
 static float face_yaw[MAX_PLAYERS], prev_x[MAX_PLAYERS], prev_z[MAX_PLAYERS];
@@ -943,11 +993,20 @@ static void draw_popup(const GameContext *g) {
     case 10: snprintf(b, sizeof(b), "ITEMS LOST!"); col = 0xFFE74C3C; break;
     default: snprintf(b, sizeof(b), g->popup.value == 2 ? "DOUBLE DICE!" : (g->popup.value == 3 ? "BOOST +3!" : "SHIELD UP!")); col = 0xFF3498DB; break;
     }
-    draw_text_c(g->popup.x, g->popup.y, b, 4, col, 1);
+    {
+        float hw = text_w(b, 4) * 0.5f + 8.0f, px = g->popup.x, py = g->popup.y;
+        if (px < hw) px = hw;
+        if (px > SCR_W - hw) px = SCR_W - hw;
+        if (py < 70.0f) py = 70.0f;
+        if (py > 440.0f) py = 440.0f;
+        draw_text_c(px, py, b, 4, col, 1);
+    }
 }
 static void draw_fx(const GameContext *g) {
     int i;
-    for (i = 0; i < MAX_FX; ++i) if (g->fx[i].active) draw_rect(g->fx[i].x, g->fx[i].y, 4, 4, g->fx[i].color);
+    for (i = 0; i < MAX_FX; ++i)
+        if (g->fx[i].active && g->fx[i].x > -20.0f && g->fx[i].x < 868.0f && g->fx[i].y > -20.0f && g->fx[i].y < 532.0f)
+            draw_rect(g->fx[i].x, g->fx[i].y, 4, 4, g->fx[i].color);
 }
 static void draw_hint(const char *s) {
     float w = text_w(s, 3) + 32;
@@ -1159,8 +1218,8 @@ static void draw_setup_overlay(const GameContext *g) {
         }
         draw_text(68, y + 26, b, 3, row == g->setup_cursor ? 0xFFF1C40F : 0xFFFFFFFF, 1);
     }
-    draw_minimap(g, 490, 74, 320, 240);
-    draw_text_c(650, 326, g->board->name, 3, 0xFFFFFFFF, 1);
+    draw_minimap(g, 490, 74, 320, 183);
+    draw_text_c(650, 270, g->board->name, 3, 0xFFFFFFFF, 1);
     draw_rect(60, 436, 728, 52, 0xFF243447);
     draw_text_c(424, 444, "TRIANGLE: NEXT ROW    O: CHANGE", 3, 0xFFFFFFFF, 1);
     if (((int)(g->anim_t * 3)) & 1) draw_text_c(424, 468, "X: CONTINUE", 3, 0xFF2ECC71, 1);
@@ -1262,7 +1321,7 @@ void game_render(GameContext *g) {
         draw_rect(0, 0, SCR_W, 70, 0xE00A0E14);
         draw_text_c(424, 8, "CHOOSE A BOARD", 3, 0xFFBDC3C7, 0);
         snprintf(b, sizeof(b), "%s", g->board->name); draw_text_c(424, 30, b, 5, 0xFFFFFFFF, 1);
-        draw_minimap(g, 640, 90, 180, 130);
+        draw_minimap(g, 640, 90, 180, 103);
         draw_hint("O: CHANGE BOARD   X: START   SQ: BACK");
         break; }
     case STATE_MG_INTRO: case STATE_MG_PLAY: case STATE_MG_RESULT: {
@@ -1297,4 +1356,5 @@ void game_render(GameContext *g) {
     tiny3d_Flip();
     dbg("done", (int)st, 0);
     if (dbg_frames < 1000) dbg_frames++;
+    if ((g->frame % 300u) == 0u) LOG_I("alive frame=%u state=%d", (unsigned)g->frame, (int)g->state);
 }

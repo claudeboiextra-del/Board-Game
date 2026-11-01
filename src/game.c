@@ -192,8 +192,8 @@ static void cam_update(GameContext *g)
         tp[0] = sinf(t * 0.5f) * 3.0f; tp[1] = 5.2f; tp[2] = 22.0f;
         tl[0] = 0; tl[1] = 2.0f; tl[2] = 0; break;
     case STATE_BOOT: case STATE_SETUP: case STATE_BOARD_SELECT: case STATE_MATCH: case STATE_EXIT:
-        tp[0] = sinf(t * 0.35f) * 1.5f; tp[1] = 27.0f; tp[2] = 20.5f;
-        tl[0] = 0; tl[1] = 0; tl[2] = 1.0f; break;
+        tp[0] = sinf(t * 0.35f) * 2.0f; tp[1] = 38.0f; tp[2] = 28.0f;
+        tl[0] = 0; tl[1] = 0; tl[2] = 0.5f; break;
     case STATE_MG_INTRO: case STATE_MG_PLAY: case STATE_MG_RESULT:
         tp[0] = 0; tp[1] = 7.5f; tp[2] = 18.0f;
         tl[0] = 0; tl[1] = 3.2f; tl[2] = 0; k = 0.12f; break;

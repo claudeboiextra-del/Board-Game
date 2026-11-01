@@ -165,7 +165,10 @@ static int proj(const Cam *c, V3 p, float *sx, float *sy, float *dep) {
 }
 int render_project(const GameContext *g, float x, float y, float z, float *sx, float *sy) {
     Cam c; float d; cam_setup(g, &c);
-    return proj(&c, v3(x, y, z), sx, sy, &d);
+    if (!proj(&c, v3(x, y, z), sx, sy, &d)) return 0;
+    /* callers place 2D popups/sparks at the result: refuse points far outside the screen */
+    if (!(*sx > -100.0f && *sx < 950.0f && *sy > -100.0f && *sy < 620.0f)) return 0;
+    return 1;
 }
 
 enum { L_FLOOR = 1, L_DECAL, L_PATH, L_PATHTOP, L_PAD, L_PADTOP, L_SHADOW, L_OBJ, L_FX };
@@ -179,6 +182,52 @@ static float g_gd;
 #define F_UNLIT  2
 
 static void dbg_note(int n);
+#define CLIP_X0 -64.0f
+#define CLIP_X1 912.0f
+#define CLIP_Y0 -64.0f
+#define CLIP_Y1 576.0f
+static void store_quad(const float *x, const float *y, float qd, u32 col) {
+    int i;
+    if (nq >= MAX_Q) return;
+    for (i = 0; i < 4; ++i) { qb[nq].x[i] = x[i]; qb[nq].y[i] = y[i]; }
+    qb[nq].gd = g_gd; qb[nq].qd = qd; qb[nq].col = col; qb[nq].layer = g_layer;
+    nq++;
+}
+/* Sutherland-Hodgman against one axis-aligned edge. axis 0 = x, 1 = y; keep = (v >= lim) if ge else (v <= lim) */
+static int clip_edge(const float *ix, const float *iy, int n, float *ox, float *oy, int axis, float lim, int ge) {
+    int i, m = 0;
+    for (i = 0; i < n; ++i) {
+        int j = (i + 1) % n;
+        float ax = ix[i], ay = iy[i], bx = ix[j], by = iy[j];
+        float va = axis ? ay : ax, vb = axis ? by : bx;
+        int ina = ge ? (va >= lim) : (va <= lim), inb = ge ? (vb >= lim) : (vb <= lim);
+        if (ina && m < 11) { ox[m] = ax; oy[m] = ay; m++; }
+        if (ina != inb && m < 11) {
+            float t = (lim - va) / (vb - va);
+            ox[m] = ax + (bx - ax) * t; oy[m] = ay + (by - ay) * t; m++;
+        }
+    }
+    return m;
+}
+/* clip a screen-space quad to the safe rectangle and emit it as 1..n-2 quads (triangle fan, degenerate quads) */
+static void emit_clipped(const float *sx, const float *sy, float qd, u32 col) {
+    float ax[16], ay[16], bx[16], by[16]; int n = 4, i;
+    int inside = 1;
+    for (i = 0; i < 4; ++i)
+        if (sx[i] < CLIP_X0 || sx[i] > CLIP_X1 || sy[i] < CLIP_Y0 || sy[i] > CLIP_Y1) inside = 0;
+    if (inside) { store_quad(sx, sy, qd, col); return; }
+    for (i = 0; i < 4; ++i) { ax[i] = sx[i]; ay[i] = sy[i]; }
+    n = clip_edge(ax, ay, n, bx, by, 0, CLIP_X0, 1); if (n < 3) return;
+    n = clip_edge(bx, by, n, ax, ay, 0, CLIP_X1, 0); if (n < 3) return;
+    n = clip_edge(ax, ay, n, bx, by, 1, CLIP_Y0, 1); if (n < 3) return;
+    n = clip_edge(bx, by, n, ax, ay, 1, CLIP_Y1, 0); if (n < 3) return;
+    for (i = 1; i + 1 < n; ++i) {
+        float qx[4], qy[4];
+        qx[0] = ax[0]; qy[0] = ay[0]; qx[1] = ax[i]; qy[1] = ay[i];
+        qx[2] = ax[i + 1]; qy[2] = ay[i + 1]; qx[3] = ax[i + 1]; qy[3] = ay[i + 1];
+        store_quad(qx, qy, qd, col);
+    }
+}
 static void grp(V3 c) { V3 d = vsub(c, C.pos); g_gd = vdot(d, C.f); }
 
 static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
@@ -190,7 +239,7 @@ static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
         (sx[0] > SCR_W + 60 && sx[1] > SCR_W + 60 && sx[2] > SCR_W + 60 && sx[3] > SCR_W + 60) ||
         (sy[0] < -60 && sy[1] < -60 && sy[2] < -60 && sy[3] < -60) ||
         (sy[0] > SCR_H + 60 && sy[1] > SCR_H + 60 && sy[2] > SCR_H + 60 && sy[3] > SCR_H + 60)) return;
-    for (i = 0; i < 4; ++i) if (sx[i] < -3000.f || sx[i] > 3800.f || sy[i] < -3000.f || sy[i] > 3500.f) return;
+    for (i = 0; i < 4; ++i) if (!(sx[i] > -1.0e6f && sx[i] < 1.0e6f && sy[i] > -1.0e6f && sy[i] < 1.0e6f)) return;  /* NaN / inf guard */
     n = vnorm(vcross(vsub(b, a), vsub(d, a)));
     ctr = vmul(vadd(vadd(a, b), vadd(c, d)), 0.25f);
     view = vsub(ctr, C.pos);
@@ -202,9 +251,7 @@ static void wq(V3 a, V3 b, V3 c, V3 d, u32 col, int fl, V3 oc) {
         float l = vdot(n, LIGHT); if (l < 0) l = 0;
         col = col_scale(col, 0.42f + 0.62f * l);
     }
-    for (i = 0; i < 4; ++i) { qb[nq].x[i] = sx[i]; qb[nq].y[i] = sy[i]; }
-    qb[nq].gd = g_gd; qb[nq].qd = dz * 0.25f; qb[nq].col = col; qb[nq].layer = g_layer;
-    nq++;
+    emit_clipped(sx, sy, dz * 0.25f, col);
 }
 static int qcmp(const void *A, const void *B) {
     const Q *a = &qb[*(const unsigned short *)A], *b = &qb[*(const unsigned short *)B];
@@ -946,11 +993,20 @@ static void draw_popup(const GameContext *g) {
     case 10: snprintf(b, sizeof(b), "ITEMS LOST!"); col = 0xFFE74C3C; break;
     default: snprintf(b, sizeof(b), g->popup.value == 2 ? "DOUBLE DICE!" : (g->popup.value == 3 ? "BOOST +3!" : "SHIELD UP!")); col = 0xFF3498DB; break;
     }
-    draw_text_c(g->popup.x, g->popup.y, b, 4, col, 1);
+    {
+        float hw = text_w(b, 4) * 0.5f + 8.0f, px = g->popup.x, py = g->popup.y;
+        if (px < hw) px = hw;
+        if (px > SCR_W - hw) px = SCR_W - hw;
+        if (py < 70.0f) py = 70.0f;
+        if (py > 440.0f) py = 440.0f;
+        draw_text_c(px, py, b, 4, col, 1);
+    }
 }
 static void draw_fx(const GameContext *g) {
     int i;
-    for (i = 0; i < MAX_FX; ++i) if (g->fx[i].active) draw_rect(g->fx[i].x, g->fx[i].y, 4, 4, g->fx[i].color);
+    for (i = 0; i < MAX_FX; ++i)
+        if (g->fx[i].active && g->fx[i].x > -20.0f && g->fx[i].x < 868.0f && g->fx[i].y > -20.0f && g->fx[i].y < 532.0f)
+            draw_rect(g->fx[i].x, g->fx[i].y, 4, 4, g->fx[i].color);
 }
 static void draw_hint(const char *s) {
     float w = text_w(s, 3) + 32;
@@ -1300,4 +1356,5 @@ void game_render(GameContext *g) {
     tiny3d_Flip();
     dbg("done", (int)st, 0);
     if (dbg_frames < 1000) dbg_frames++;
+    if ((g->frame % 300u) == 0u) LOG_I("alive frame=%u state=%d", (unsigned)g->frame, (int)g->state);
 }

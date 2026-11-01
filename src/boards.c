@@ -21,7 +21,9 @@ static void lnk(Board *b, int a, int c)
 }
 static int add(Board *b, float wx, float wz, SpaceType t)
 {
-    int i = b->node_count++;
+    int i;
+    if (b->node_count >= MAX_NODES) return MAX_NODES - 1;   /* never overflow the node array */
+    i = b->node_count++;
     BoardNode *n = &b->nodes[i];
     n->id = i; n->type = t; n->next_count = 0; n->hidden_revealed = false;
     n->x = 0.5f + wx / WORLD_SX; n->y = 0.5f + wz / WORLD_SZ;
